@@ -1,1 +1,0 @@
-- Fix shader recompilation with iris
