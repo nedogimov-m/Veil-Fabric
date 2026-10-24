@@ -11,7 +11,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import static org.lwjgl.glfw.GLFW.GLFW_PRESS;
+import net.minecraft.client.input.KeyEvent;
+import com.mojang.blaze3d.platform.InputConstants;
 
 @Mixin(KeyboardHandler.class)
 public class KeyboardHandlerMixin {
@@ -21,8 +22,8 @@ public class KeyboardHandlerMixin {
     private Minecraft minecraft;
 
     @Inject(method = "keyPress", at = @At("TAIL"))
-    public void keyPress(long window, int key, int scancode, int action, int mods, CallbackInfo ci) {
-        if (window == this.minecraft.getWindow().getWindow() && action == GLFW_PRESS && VeilImGuiCompat.EDITOR_KEY.matches(key, scancode)) {
+    public void keyPress(long window, int action, KeyEvent event, CallbackInfo ci) {
+        if (window == this.minecraft.getWindow().handle() && action == InputConstants.PRESS && VeilImGuiCompat.EDITOR_KEY.matches(event)) {
             VeilRenderSystem.renderer().getEditorManager().toggle();
         }
     }

@@ -11,7 +11,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import static org.lwjgl.glfw.GLFW.GLFW_PRESS;
+import net.minecraft.client.input.MouseButtonInfo;
+import com.mojang.blaze3d.platform.InputConstants;
 
 @Mixin(MouseHandler.class)
 public class MouseHandlerMixin {
@@ -20,9 +21,9 @@ public class MouseHandlerMixin {
     @Final
     private Minecraft minecraft;
 
-    @Inject(method = "onPress", at = @At("HEAD"))
-    public void keyPress(long window, int button, int action, int mods, CallbackInfo ci) {
-        if (window == this.minecraft.getWindow().getWindow() && action == GLFW_PRESS && VeilImGuiCompat.EDITOR_KEY.matchesMouse(button)) {
+    @Inject(method = "onButton", at = @At("HEAD"))
+    public void keyPress(long window, MouseButtonInfo button, int action, CallbackInfo ci) {
+        if (window == this.minecraft.getWindow().handle() && action == InputConstants.PRESS && VeilImGuiCompat.EDITOR_KEY.matches(InputConstants.Type.MOUSE.getOrCreate(button.button()))) {
             VeilRenderSystem.renderer().getEditorManager().toggle();
         }
     }

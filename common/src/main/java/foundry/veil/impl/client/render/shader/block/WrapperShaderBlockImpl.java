@@ -1,59 +1,32 @@
 package foundry.veil.impl.client.render.shader.block;
-
-import foundry.veil.api.client.render.VeilRenderSystem;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
 import foundry.veil.api.client.render.shader.block.DynamicShaderBlock;
-import org.apache.commons.lang3.Validate;
-import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
-import static org.lwjgl.opengl.GL30C.glBindBufferRange;
-
-@ApiStatus.Internal
-public class WrapperShaderBlockImpl extends ShaderBlockImpl<Object> implements DynamicShaderBlock<Object> {
-
+/** Non-owning native buffer slice, suitable for externally uploaded animation data. */
+public final class WrapperShaderBlockImpl implements DynamicShaderBlock<Object> {
+    private final BufferBinding binding;
+    private final GpuBufferSlice backing;
     private int size;
-
-    public WrapperShaderBlockImpl(BufferBinding binding, int buffer) {
-        super(binding);
-        this.buffer = buffer;
+    private boolean closed;
+    public WrapperShaderBlockImpl(BufferBinding binding, GpuBufferSlice backing) {
+        if (binding != BufferBinding.UNIFORM) throw new UnsupportedOperationException("Writable storage buffers require a native algorithm migration");
+        if ((backing.buffer().usage() & com.mojang.renderpearl.api.buffers.GpuBuffer.USAGE_UNIFORM) == 0) throw new IllegalArgumentException("Borrowed buffer is not uniform storage");
+        this.binding = binding; this.backing = backing; this.size = Math.toIntExact(backing.length());
     }
-
-    @Override
-    public void bind(int index) {
-        int binding = this.binding.getGlType();
-        Validate.inclusiveBetween(0, VeilRenderSystem.maxTargetBindings(binding), index);
-        glBindBufferRange(binding, index, this.buffer, 0, this.size);
+    private void ensureOpen() { if (this.closed || this.backing.buffer().isClosed()) throw new IllegalStateException("Borrowed shader block is closed"); }
+    @Override public void set(@Nullable Object value) { throw new UnsupportedOperationException("Borrowed buffer data is uploaded by its owner"); }
+    @Override public @Nullable Object getValue() { throw new UnsupportedOperationException("Borrowed buffer has no Java object value"); }
+    @Override public int getSize() { this.ensureOpen(); return this.size; }
+    @Override public void setSize(int size) {
+        this.ensureOpen();
+        if (size <= 0 || size > this.backing.length()) throw new IllegalArgumentException("Borrowed block size exceeds its backing slice");
+        this.size = size;
     }
-
-    @Override
-    public void unbind(int index) {
-        int binding = this.binding.getGlType();
-        Validate.inclusiveBetween(0, VeilRenderSystem.maxTargetBindings(binding), index);
-        glBindBufferRange(binding, index, 0, 0, this.size);
-    }
-
-    @Override
-    public void set(@Nullable Object value) {
-        throw new UnsupportedOperationException("Wrapper Shader Block cannot be set to a java object");
-    }
-
-    @Override
-    public @Nullable Object getValue() {
-        throw new UnsupportedOperationException("Wrapper Shader Block cannot be read as a java object");
-    }
-
-    @Override
-    public int getSize() {
-        return this.size;
-    }
-
-    @Override
-    public void setSize(int newSize) {
-        this.size = newSize;
-    }
-
-    @Override
-    public void free() {
-        VeilRenderSystem.unbind(this);
-    }
+    @Override public void prepare(CommandEncoder encoder) { this.ensureOpen(); }
+    @Override public Snapshot snapshot() { return Snapshot.borrowed(this.slice()); }
+    @Override public GpuBufferSlice slice() { this.ensureOpen(); return this.backing.buffer().slice(this.backing.offset(), this.size); }
+    @Override public BufferBinding getBinding() { return this.binding; }
+    @Override public void free() { this.closed = true; }
 }

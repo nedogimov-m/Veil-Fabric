@@ -2,7 +2,7 @@ package foundry.veil.api.resource;
 
 import foundry.veil.VeilClient;
 import foundry.veil.api.resource.type.McMetaResource;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.ResourceMetadata;
@@ -63,7 +63,7 @@ public interface VeilResourceManager {
      * @param location The location to get the resource from
      * @return The resource found or <code>null</code>
      */
-    default @Nullable VeilResource<?> getVeilResource(ResourceLocation location) {
+    default @Nullable VeilResource<?> getVeilResource(Identifier location) {
         return this.getVeilResource(location.getNamespace(), location.getPath());
     }
 
@@ -85,7 +85,7 @@ public interface VeilResourceManager {
      * @param location The location to get the resource from
      * @return The metadata for the resource found or <code>null</code>
      */
-    default @Nullable ResourceMetadata getResourceMetadata(ResourceLocation location) {
+    default @Nullable ResourceMetadata getResourceMetadata(Identifier location) {
         return this.getResourceMetadata(location.getNamespace(), location.getPath());
     }
 }

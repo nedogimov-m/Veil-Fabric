@@ -2,9 +2,9 @@ package foundry.veil.mixin.resource;
 
 import foundry.veil.Veil;
 import foundry.veil.ext.PackResourcesExtension;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.PackType;
-import net.minecraft.server.packs.VanillaPackResources;
+import net.minecraft.server.packs.FixedPathPackResources;
 import net.minecraft.server.packs.resources.IoSupplier;
 import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Final;
@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-@Mixin(VanillaPackResources.class)
+@Mixin(FixedPathPackResources.class)
 public abstract class ResourceVanillaPackResourcesMixin implements PackResourcesExtension {
 
     @Shadow
@@ -65,7 +65,7 @@ public abstract class ResourceVanillaPackResourcesMixin implements PackResources
                             @Override
                             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                                 String filename = nsPath.relativize(file).toString().replace(separator, "/");
-                                ResourceLocation name = ResourceLocation.tryBuild(namespace, filename);
+                                Identifier name = Identifier.tryBuild(namespace, filename);
 
                                 if (name != null) {
                                     consumer.accept(type, name, nsPath, file, null);

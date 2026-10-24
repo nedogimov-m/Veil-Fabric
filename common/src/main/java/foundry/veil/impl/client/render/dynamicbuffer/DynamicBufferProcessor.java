@@ -1,8 +1,8 @@
 package foundry.veil.impl.client.render.dynamicbuffer;
 
-import com.mojang.blaze3d.vertex.VertexFormat;
-import com.mojang.blaze3d.vertex.VertexFormatElement;
-import foundry.veil.Veil;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
+import foundry.veil.impl.client.render.shader.processor.NativeGlslNodeWriter;
+import foundry.veil.impl.client.render.shader.processor.NativeGlslTreeWriter;
 import foundry.veil.api.client.render.dynamicbuffer.DynamicBufferType;
 import foundry.veil.api.client.render.shader.processor.ShaderPreProcessor;
 import io.github.ocelot.glslprocessor.api.GlslInjectionPoint;
@@ -33,13 +33,59 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
 
     private static final String[] VECTOR_ELEMENTS = {".x", ".y", ".z", ".w"};
     private static final Set<String> BLOCK_SHADERS = Set.of("rendertype_solid", "rendertype_cutout", "rendertype_cutout_mipped", "rendertype_translucent");
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("Veil");
+    private int producedBuffers;
+
+    /** Fragment outputs actually emitted by this processor, after the vertex/fragment pair is processed. */
+    public int producedBuffers() { return this.producedBuffers; }
 
     public DynamicBufferProcessor() {
     }
 
+    private static String lightmapCoordinate(GlslNode uv, Context context) {
+        String coordinate = "vec2(" + NativeGlslNodeWriter.expression(uv) + ") / 256.0";
+        if (context instanceof MinecraftContext) coordinate += " + vec2(0.5 / 16.0)";
+        return "clamp(" + coordinate + ", vec2(0.5 / 16.0), vec2(15.5 / 16.0))";
+    }
+    private static boolean samplesAlbedo(GlslNode node) {
+        return node.stream().anyMatch(child -> child instanceof GlslInvokeFunctionNode call
+                && call.getHeader() instanceof GlslVariableNode function
+                && Set.of("texture", "sampleNearest", "sampleRGSS").contains(function.getName())
+                && !call.getParameters().isEmpty() && call.getParameters().getFirst() instanceof GlslVariableNode sampler
+                && sampler.getName().equals("Sampler0"));
+    }
+    /** Keep the complete native filtering choice (including RGSS conditionals), excluding already-lit vertex tint. */
+    private static Optional<GlslNode> albedoSample(GlslNode statement) {
+        return statement.stream().filter(DynamicBufferProcessor::samplesAlbedo)
+                .filter(node -> node.stream().noneMatch(child -> child instanceof GlslVariableNode variable
+                        && Set.of("vertexColor", "ColorModulator").contains(variable.getName())))
+                .filter(node -> !(node instanceof GlslNewFieldNode) && !(node instanceof GlslAssignmentNode))
+                .findFirst();
+    }
+
+    /** Native shaderc requires explicit matching stage locations, including generated marker varyings. */
+    @SuppressWarnings("unchecked")
+    private static String varying(Context context, DynamicBufferType type, String direction, String valueType, String name, GlslTree tree) {
+        Map<DynamicBufferType, Integer> locations = (Map<DynamicBufferType, Integer>) context.customProgramData()
+                .computeIfAbsent("veil:dynamic_locations", key -> new EnumMap<>(DynamicBufferType.class));
+        Integer location = locations.get(type);
+        if (location == null) {
+            Set<Integer> occupied = new HashSet<>(locations.values());
+            var matcher = java.util.regex.Pattern.compile("layout\\s*\\([^)]*\\blocation\\s*=\\s*(\\d+)").matcher(NativeGlslTreeWriter.source(tree));
+            while (matcher.find()) occupied.add(Integer.parseInt(matcher.group(1)));
+            int next = 16;
+            while (occupied.contains(next)) next++;
+            if (next >= 32) throw new IllegalArgumentException("No free native varying location for " + type);
+            location = next; locations.put(type, location);
+        }
+        return "layout(location = " + location + ") " + direction + " " + valueType + " " + name;
+    }
+
     @Override
     public void modify(Context ctx, GlslTree tree) throws IOException, GlslSyntaxException, LexerException {
+        if (!ctx.isSourceFile() || ctx.activeBuffers() == 0) return;
         DynamicBufferType[] types = DynamicBufferType.decode(ctx.activeBuffers());
+        int outputBase = ctx instanceof MinecraftContext minecraft ? minecraft.pipeline().getColorTargetStates().size() : 1;
 
         Map<String, GlslNode> markers = tree.getMarkers();
         GlslFunctionNode mainFunction = tree.mainFunction().orElseThrow();
@@ -70,7 +116,7 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
                     if (!(node instanceof GlslInvokeFunctionNode invokeFunctionNode) || invokeFunctionNode.getParameters().size() != 2) {
                         return false;
                     }
-                    return invokeFunctionNode.getHeader() instanceof GlslVariableNode variableNode && ("minecraft_sample_lightmap".equals(variableNode.getName()));
+                    return invokeFunctionNode.getHeader() instanceof GlslVariableNode variableNode && Set.of("minecraft_sample_lightmap", "sample_lightmap").contains(variableNode.getName());
                 }).findFirst();
 
                 if (sampleLightmapOptional.isPresent()) {
@@ -78,7 +124,7 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
                     sampler = parameters.get(0);
                     lightmapUV = parameters.get(1);
                     blockLightmap = true;
-                } else if (vertexFormat.contains(VertexFormatElement.UV2)) {
+                } else if (vertexFormat != null && vertexFormat.contains("UV2")) {
                     Optional<GlslNode> texelFetchOptional = mainFunction.stream().filter(node -> {
                         if (!(node instanceof GlslInvokeFunctionNode invokeFunctionNode) || invokeFunctionNode.getParameters().size() != 3) {
                             return false;
@@ -91,7 +137,7 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
                                 operation.getSecond() instanceof GlslConstantNode constantNode &&
                                 constantNode.intValue() == 16 &&
                                 operation.getOperand() == GlslOperationNode.Operand.DIVIDE &&
-                                vertexFormat.getElementName(VertexFormatElement.UV2).equals(variableNode.getName());
+                                "UV2".equals(variableNode.getName());
                     }).findFirst();
 
                     if (texelFetchOptional.isPresent()) {
@@ -104,10 +150,10 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
 
             for (int i = 0; i < types.length; i++) {
                 DynamicBufferType type = types[i];
-                String output = type.getOutputDeclaration(1 + i);
+                String output = type.getOutputDeclaration(outputBase + i);
 
-                String shaderName = minecraftContext.shaderInstance();
-                if ("rendertype_lines".equals(shaderName)) {
+                String shaderName = Objects.requireNonNull(ctx.name()).getPath().replaceFirst("^core/", "");
+                if (Set.of("rendertype_lines", "lines").contains(shaderName)) {
                     if (type == DynamicBufferType.NORMAL && ctx.isFragment()) {
                         treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(output));
                         mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(type.getSourceName()), GlslParser.parseExpression("vec4(0.0, 0.0, 0.0, 1.0)"), GlslAssignmentNode.Operand.EQUAL));
@@ -126,18 +172,18 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
 
                         if (ctx.isVertex()) {
                             if (lightmapUV != null) {
-                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("out vec2 Pass" + type.getSourceName()));
+                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "out", "vec2", "Pass" + type.getSourceName(), tree)));
                                 if (blockLightmap) {
-                                    mainFunctionBody.add(GlslParser.parseExpression("vec2 veilTexCoord2 = clamp(" + lightmapUV.toSourceString() + " / 256.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0))"));
+                                    mainFunctionBody.add(GlslParser.parseExpression("vec2 veilTexCoord2 = " + lightmapCoordinate(lightmapUV, ctx)));
                                     mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), new GlslVariableNode("veilTexCoord2"), GlslAssignmentNode.Operand.EQUAL));
                                 } else {
-                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), GlslParser.parseExpression("vec2(" + lightmapUV.toSourceString() + " / 256.0)"), GlslAssignmentNode.Operand.EQUAL));
+                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), GlslParser.parseExpression("vec2(" + NativeGlslNodeWriter.expression(lightmapUV) + " / 256.0)"), GlslAssignmentNode.Operand.EQUAL));
                                 }
                                 modified = true;
                                 data.compute("mask", (s, o) -> (o instanceof Integer val ? val : 0) | type.getMask());
                             }
                         } else if (inVertex) {
-                            treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("in vec2 Pass" + type.getSourceName()));
+                            treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "in", "vec2", "Pass" + type.getSourceName(), tree)));
                             treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(output));
                             mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(type.getSourceName()), GlslParser.parseExpression("vec4(Pass" + type.getSourceName() + ", 0.0, 1.0)"), GlslAssignmentNode.Operand.EQUAL));
                             modified = true;
@@ -149,17 +195,17 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
 
                         if (ctx.isVertex()) {
                             if (lightmapUV != null && sampler != null) {
-                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("out vec3 Pass" + type.getSourceName()));
+                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "out", "vec3", "Pass" + type.getSourceName(), tree)));
                                 if (blockLightmap) {
-                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), GlslParser.parseExpression("texture(" + sampler.toSourceString() + ", veilTexCoord2).rgb"), GlslAssignmentNode.Operand.EQUAL));
+                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), GlslParser.parseExpression("texture(" + NativeGlslNodeWriter.expression(sampler) + ", " + lightmapCoordinate(lightmapUV, ctx) + ").rgb"), GlslAssignmentNode.Operand.EQUAL));
                                 } else {
-                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), GlslParser.parseExpression("texelFetch(" + sampler.toSourceString() + ", " + lightmapUV.toSourceString() + " / 16, 0).rgb"), GlslAssignmentNode.Operand.EQUAL));
+                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), GlslParser.parseExpression("texelFetch(" + NativeGlslNodeWriter.expression(sampler) + ", " + NativeGlslNodeWriter.expression(lightmapUV) + " / 16, 0).rgb"), GlslAssignmentNode.Operand.EQUAL));
                                 }
                                 modified = true;
                                 data.compute("mask", (s, o) -> (o instanceof Integer val ? val : 0) | type.getMask());
                             }
                         } else if (inVertex) {
-                            treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("in vec3 Pass" + type.getSourceName()));
+                            treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "in", "vec3", "Pass" + type.getSourceName(), tree)));
                             treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(output));
                             mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(type.getSourceName()), GlslParser.parseExpression("vec4(Pass" + type.getSourceName() + ", 1.0)"), GlslAssignmentNode.Operand.EQUAL));
                             modified = true;
@@ -170,29 +216,45 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
                 // Inject Normal passthrough into vertex and fragment shaders
                 if (type == DynamicBufferType.NORMAL && !markers.containsKey("veil:" + DynamicBufferType.NORMAL.getName())) {
                     // Inject a normal output into the particle, lead, and text fragment shaders
-                    if (ctx.isFragment() && ("particle".equals(shaderName) || "rendertype_leash".equals(shaderName) || "rendertype_text".equals(shaderName))) {
+                    if (ctx.isFragment() && Set.of("particle", "rendertype_leash", "leash", "rendertype_text", "text").contains(shaderName)) {
                         treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(output));
                         mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(type.getSourceName()), GlslParser.parseExpression("vec4(0.0, 0.0, 1.0, 1.0)"), GlslAssignmentNode.Operand.EQUAL));
                         modified = true;
                     }
 
-                    if (vertexFormat.contains(VertexFormatElement.NORMAL)) {
+                    if (vertexFormat != null && vertexFormat.contains("Normal")) {
                         if (ctx.isVertex()) {
-                            Optional<GlslNewFieldNode> fieldOptional = tree.field(vertexFormat.getElementName(VertexFormatElement.NORMAL));
+                            Optional<GlslNewFieldNode> fieldOptional = tree.field("Normal");
                             if (fieldOptional.isPresent()) {
-                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("uniform mat3 NormalMat"));
-                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("out vec3 Pass" + type.getSourceName()));
-                                mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), GlslParser.parseExpression("NormalMat * " + fieldOptional.get().getName()), GlslAssignmentNode.Operand.EQUAL));
+                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "out", "vec3", "Pass" + type.getSourceName(), tree)));
+                                mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), GlslParser.parseExpression("transpose(inverse(mat3(ModelViewMat))) * " + fieldOptional.get().getName()), GlslAssignmentNode.Operand.EQUAL));
                                 modified = true;
                                 data.compute("mask", (s, o) -> (o instanceof Integer val ? val : 0) | type.getMask());
                             }
                         } else if (ctx.isFragment()) {
                             if (inVertex) {
-                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("in vec3 Pass" + type.getSourceName()));
+                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "in", "vec3", "Pass" + type.getSourceName(), tree)));
                                 treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(output));
                                 mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(type.getSourceName()), GlslParser.parseExpression("vec4(Pass" + type.getSourceName() + ", 1.0)"), GlslAssignmentNode.Operand.EQUAL));
                                 modified = true;
                             }
+                        }
+                    } else if (vertexFormat != null && vertexFormat.contains("Position")) {
+                        // Native terrain/block formats no longer carry normals. Preserve real surface
+                        // orientation by differentiating a view-space position varying in the fragment.
+                        if (ctx.isVertex()) {
+                            String position = mainFunction.stream().filter(node -> node instanceof GlslNewFieldNode field && "pos".equals(field.getName()))
+                                    .findAny().isPresent() ? "pos" : "Position";
+                            treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "out", "vec3", "Pass" + type.getSourceName(), tree)));
+                            mainFunctionBody.add(GlslParser.parseExpression("Pass" + type.getSourceName() + " = (ModelViewMat * vec4(" + position + ", 1.0)).xyz"));
+                            data.compute("mask", (s, o) -> (o instanceof Integer val ? val : 0) | type.getMask());
+                            data.put("veil:dynamic_derivative_normal", true); modified = true;
+                        } else if (inVertex && Boolean.TRUE.equals(data.get("veil:dynamic_derivative_normal"))) {
+                            treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "in", "vec3", "Pass" + type.getSourceName(), tree)));
+                            treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(output));
+                            mainFunctionBody.add(GlslParser.parseExpression(type.getSourceName() + " = vec4(normalize(cross(dFdx(Pass" + type.getSourceName()
+                                    + "), dFdy(Pass" + type.getSourceName() + "))), 1.0)"));
+                            modified = true;
                         }
                     }
                 }
@@ -212,42 +274,37 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
                         }).findFirst();
                         if (mixLightOptional.isPresent()) {
                             GlslNode color = ((GlslInvokeFunctionNode) mixLightOptional.get()).getParameters().get(3);
-                            treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("out vec4 Pass" + type.getSourceName()));
+                            treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "out", "vec4", "Pass" + type.getSourceName(), tree)));
                             mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), color, GlslAssignmentNode.Operand.EQUAL));
                             modified = true;
                             data.compute("mask", (s, o) -> (o instanceof Integer val ? val : 0) | type.getMask());
-                        } else if (vertexFormat.contains(VertexFormatElement.COLOR)) {
-                            Optional<GlslNewFieldNode> fieldOptional = tree.field(vertexFormat.getElementName(VertexFormatElement.COLOR));
+                        } else if (vertexFormat != null && vertexFormat.contains("Color")) {
+                            Optional<GlslNewFieldNode> fieldOptional = tree.field("Color");
                             if (fieldOptional.isPresent()) {
-                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("out vec4 Pass" + type.getSourceName()));
+                                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "out", "vec4", "Pass" + type.getSourceName(), tree)));
                                 mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode("Pass" + type.getSourceName()), new GlslVariableNode(fieldOptional.get().getName()), GlslAssignmentNode.Operand.EQUAL));
                                 modified = true;
                                 data.compute("mask", (s, o) -> (o instanceof Integer val ? val : 0) | type.getMask());
                             }
                         }
                     } else if (inVertex) {
-                        treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("in vec4 Pass" + type.getSourceName()));
+                        treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, type, "in", "vec4", "Pass" + type.getSourceName(), tree)));
                         treeBody.addFirst(GlslParser.parseExpression(output));
 
-                        boolean hasColorModulator = tree.field("ColorModulator").isPresent();
+                        boolean hasColorModulator = tree.searchField("ColorModulator").findAny().isPresent()
+                                || tree.getBody().stream().filter(io.github.ocelot.glslprocessor.api.node.variable.GlslStructDeclarationNode.class::isInstance)
+                                .map(io.github.ocelot.glslprocessor.api.node.variable.GlslStructDeclarationNode.class::cast)
+                                .anyMatch(block -> block.getStructSpecifier().getFields().stream().anyMatch(field -> field.getName().equals("ColorModulator")));
                         boolean inserted = false;
                         for (int j = 0; j < mainFunctionBody.size(); j++) {
-                            GlslNode body = mainFunctionBody.get(i);
-                            Optional<GlslNode> textureOptional = body.stream().filter(node -> {
-                                if (!(node instanceof GlslInvokeFunctionNode invokeFunctionNode) || invokeFunctionNode.getParameters().size() != 2) {
-                                    return false;
-                                }
-                                return invokeFunctionNode.getHeader() instanceof GlslVariableNode variableNode &&
-                                        "texture".equals(variableNode.getName()) &&
-                                        invokeFunctionNode.getParameters().getFirst() instanceof GlslVariableNode textureSampler &&
-                                        "Sampler0".equals(textureSampler.getName());
-                            }).findFirst();
+                            GlslNode body = mainFunctionBody.get(j);
+                            Optional<GlslNode> textureOptional = albedoSample(body);
 
                             if (textureOptional.isPresent()) {
                                 if (hasColorModulator) {
-                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(type.getSourceName()), GlslParser.parseExpression(textureOptional.get().toSourceString() + " * ColorModulator * Pass" + type.getSourceName()), GlslAssignmentNode.Operand.EQUAL));
+                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(type.getSourceName()), GlslParser.parseExpression(NativeGlslNodeWriter.expression(textureOptional.get()) + " * ColorModulator * Pass" + type.getSourceName()), GlslAssignmentNode.Operand.EQUAL));
                                 } else {
-                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(type.getSourceName()), GlslParser.parseExpression(textureOptional.get().toSourceString() + " * Pass" + type.getSourceName()), GlslAssignmentNode.Operand.EQUAL));
+                                    mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(type.getSourceName()), GlslParser.parseExpression(NativeGlslNodeWriter.expression(textureOptional.get()) + " * Pass" + type.getSourceName()), GlslAssignmentNode.Operand.EQUAL));
                                 }
                                 inserted = true;
                                 break;
@@ -278,8 +335,8 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
                     String sourceName = bufferType.getSourceName();
                     writer.clear();
                     writer.visitTypeSpecifier(outType);
-                    treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("in " + writer + " Pass" + sourceName));
-                    treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("layout(location = " + (1 + i) + ") out " + writer + " " + sourceName));
+                    treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, bufferType, "in", writer.toString(), "Pass" + sourceName, tree)));
+                    treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("layout(location = " + (outputBase + i) + ") out " + writer + " " + sourceName));
                     mainFunctionBody.add(new GlslAssignmentNode(new GlslVariableNode(sourceName), new GlslVariableNode("Pass" + sourceName), GlslAssignmentNode.Operand.EQUAL));
                 }
                 continue;
@@ -319,7 +376,7 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
             }
 
             if (copyName == null || specifiedType == null || !(specifiedType.getSpecifier() instanceof GlslTypeSpecifier.BuiltinType nodeType) || (!nodeType.isPrimitive() && !nodeType.isVector()) || (!nodeType.isFloat() && !nodeType.isInteger() && !nodeType.isUnsignedInteger())) {
-                Veil.LOGGER.warn("Invalid node marked '#veil:{}' in {} shader: {}", typeName, ctx.typeName(), ctx.name());
+                LOGGER.warn("Invalid node marked '#veil:{}' in {} shader: {}", typeName, ctx.typeName(), ctx.name());
                 continue;
             }
 
@@ -329,11 +386,11 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
             writer.visitTypeSpecifier(outType);
             if (ctx.isVertex()) {
                 sourceName = "Pass" + bufferType.getSourceName();
-                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("out " + writer + " " + sourceName));
+                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression(varying(ctx, bufferType, "out", writer.toString(), sourceName, tree)));
                 data.compute("passmask", (s, o) -> (o instanceof Integer val ? val : 0) | bufferType.getMask());
             } else {
                 sourceName = bufferType.getSourceName();
-                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("layout(location = " + (1 + i) + ") out " + writer + " " + sourceName));
+                treeBody.add(GlslInjectionPoint.BEFORE_MAIN, GlslParser.parseExpression("layout(location = " + (outputBase + i) + ") out " + writer + " " + sourceName));
             }
 
             String cast = switch (outType) {
@@ -372,6 +429,12 @@ public class DynamicBufferProcessor implements ShaderPreProcessor {
 
         if (modified && ctx.isFragment()) {
             tree.markOutputs();
+        }
+        if (ctx.isFragment()) {
+            this.producedBuffers = 0;
+            for (DynamicBufferType type : types) {
+                if (tree.field(type.getSourceName()).isPresent()) this.producedBuffers |= type.getMask();
+            }
         }
     }
 }

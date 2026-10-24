@@ -1,618 +1,271 @@
 package foundry.veil.api.client.render.vertex;
 
-import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.MeshData;
-import com.mojang.blaze3d.vertex.VertexBuffer;
-import com.mojang.blaze3d.vertex.VertexFormat;
-import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.rendertype.VeilRenderType;
-import foundry.veil.api.client.render.shader.program.ShaderProgram;
-import foundry.veil.impl.client.render.vertex.ARBVertexArray;
-import foundry.veil.impl.client.render.vertex.DSAVertexArray;
-import foundry.veil.impl.client.render.vertex.LegacyVertexArray;
-import it.unimi.dsi.fastutil.ints.Int2IntArrayMap;
-import it.unimi.dsi.fastutil.ints.Int2IntMap;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.client.renderer.ShaderInstance;
-import org.jetbrains.annotations.ApiStatus;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.api.pipeline.IndexType;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
+import net.minecraft.client.renderer.StagedVertexBuffer;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import org.jetbrains.annotations.Nullable;
-import org.lwjgl.opengl.GL;
-import org.lwjgl.opengl.GL40C;
-import org.lwjgl.opengl.GLCapabilities;
-import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.NativeResource;
 
 import java.nio.ByteBuffer;
-import java.nio.IntBuffer;
-import java.util.function.Function;
-import java.util.function.IntFunction;
-
-import static org.lwjgl.opengl.ARBDirectStateAccess.glCreateVertexArrays;
-import static org.lwjgl.opengl.ARBDirectStateAccess.glNamedBufferData;
-import static org.lwjgl.opengl.ARBMultiDrawIndirect.glMultiDrawElementsIndirect;
-import static org.lwjgl.opengl.GL11C.*;
-import static org.lwjgl.opengl.GL15C.*;
-import static org.lwjgl.opengl.GL20C.GL_CURRENT_PROGRAM;
-import static org.lwjgl.opengl.GL30C.glDeleteVertexArrays;
-import static org.lwjgl.opengl.GL30C.glGenVertexArrays;
-import static org.lwjgl.opengl.GL31C.glDrawArraysInstanced;
-import static org.lwjgl.opengl.GL31C.glDrawElementsInstanced;
-import static org.lwjgl.opengl.GL40C.GL_PATCHES;
+import java.nio.ByteOrder;
+import java.util.*;
 
 /**
- * More generic alternative to {@link VertexBuffer} that uses the latest available OpenGL version.
+ * Native reusable indexed mesh with explicit upload/pass ownership and typed vertex bindings.
+ * Bind the compatible pipeline before drawing. Keep this mesh unchanged/alive until submit, or
+ * retain a Draw while recording and close it after submission; retained draws survive replacement/free.
+ * Borrowed buffers retain their caller-owned contents and lifetime contract.
  *
  * @author Ocelot
  */
-public abstract class VertexArray implements NativeResource {
-
+public final class VertexArray implements NativeResource, AutoCloseable {
     public static final int VERTEX_BUFFER = 0;
-    public static final int ELEMENT_ARRAY_BUFFER = 1;
-    /**
-     * @since 4.4.0
-     */
-    public static final int INSTANCE_BUFFER = 2;
+    public static final int INSTANCE_BUFFER = 1;
+    private final GpuDevice device;
+    private final String label;
+    private final Map<Integer, GpuBuffer> owned = new HashMap<>();
+    private final Set<GpuBuffer> retired = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Map<Integer, VertexArrayBuilder.Binding> bindings = new TreeMap<>();
+    private final VertexArrayBuilder builder = new VertexArrayBuilder(this);
+    private @Nullable GpuBuffer ownedIndices;
+    private @Nullable GpuBufferSlice indices;
+    private IndexType indexType = IndexType.SHORT;
+    private PrimitiveTopology topology = PrimitiveTopology.TRIANGLES;
+    private int indexCount;
+    private int vertexCount;
+    private int leases;
+    private boolean closeRequested;
+    private boolean closed;
 
-    private static VertexArrayType vertexArrayType;
-
-    protected final int id;
-    protected final VertexArrayBuilder builder;
-    protected final Int2IntMap buffers;
-    protected int indexCount;
-    protected IndexType indexType;
-    protected VertexFormat.Mode drawMode;
-
-    @Nullable
-    protected RenderSystem.AutoStorageIndexBuffer indexBuffer;
-
-    @ApiStatus.Internal
-    protected VertexArray(int id, Function<VertexArray, VertexArrayBuilder> builder) {
-        this.id = id;
-        this.builder = builder.apply(this);
-        this.buffers = new Int2IntArrayMap();
-        this.indexCount = 0;
-        this.indexType = IndexType.BYTE;
-        this.drawMode = VertexFormat.Mode.TRIANGLES;
-    }
-
-    private static void loadType() {
-        if (vertexArrayType == null) {
-            if (VeilRenderSystem.directStateAccessSupported()) {
-                vertexArrayType = VertexArrayType.DSA;
-            } else {
-                GLCapabilities caps = GL.getCapabilities();
-                if (caps.OpenGL43 || caps.GL_ARB_vertex_attrib_binding) {
-                    vertexArrayType = VertexArrayType.ARB;
-                } else {
-                    vertexArrayType = VertexArrayType.LEGACY;
-                }
-            }
-        }
-    }
-
-    /**
-     * Creates a single new vertex array.
-     *
-     * @return A new vertex array
-     */
-    public static VertexArray create() {
-        RenderSystem.assertOnRenderThreadOrInit();
-        loadType();
-        return vertexArrayType.factory.apply(VeilRenderSystem.directStateAccessSupported() ? glCreateVertexArrays() : glGenVertexArrays());
-    }
-
-    /**
-     * Creates an array of vertex arrays.
-     *
-     * @param count The number of arrays to create
-     * @return An array of new vertex arrays
-     */
+    private VertexArray(GpuDevice device, String label) { this.device = Objects.requireNonNull(device); this.label = Objects.requireNonNull(label); }
+    public static VertexArray create() { return create(RenderSystem.getDevice(), "Veil mesh"); }
+    public static VertexArray create(GpuDevice device, String label) { return new VertexArray(device, label); }
     public static VertexArray[] create(int count) {
-        VertexArray[] fill = new VertexArray[count];
-        create(fill);
-        return fill;
+        if (count < 0) throw new IllegalArgumentException("Negative mesh count");
+        VertexArray[] meshes = new VertexArray[count]; create(meshes); return meshes;
     }
-
-    /**
-     * Replaces each element of the specified array with a new vertex array.
-     *
-     * @param fill The array to fill
-     */
-    public static void create(VertexArray[] fill) {
-        RenderSystem.assertOnRenderThreadOrInit();
-        if (fill.length == 0) {
-            return;
-        }
-
-        loadType();
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer arrays = stack.mallocInt(fill.length);
-            if (VeilRenderSystem.directStateAccessSupported()) {
-                glCreateVertexArrays(arrays);
-            } else {
-                glGenVertexArrays(arrays);
-            }
-
-            for (int i = 0; i < arrays.limit(); i++) {
-                fill[i] = vertexArrayType.factory.apply(arrays.get(i));
-            }
-        }
+    public static void create(VertexArray[] meshes) {
+        for (int index = 0; index < meshes.length; index++) meshes[index] = create();
     }
-
-    /**
-     * Sets up the draw state with the specified render type.
-     *
-     * @param renderType The render type to set up
-     * @since 1.2.0
-     */
-    public void setup(RenderType renderType) {
-        renderType.setupRenderState();
-        ShaderInstance shader = RenderSystem.getShader();
-        if (shader != null) {
-            shader.setDefaultUniforms(this.drawMode, RenderSystem.getModelViewMatrix(), RenderSystem.getProjectionMatrix(), Minecraft.getInstance().getWindow());
-            shader.apply();
-        }
+    private void ensureOpen() { if (this.closed || this.closeRequested) throw new IllegalStateException("Mesh is retired: " + this.label); }
+    public boolean isClosed() { return this.closed; }
+    public VertexArrayBuilder editFormat() { this.ensureOpen(); return this.builder; }
+    public Map<Integer, VertexFormat> formats() {
+        this.ensureOpen(); Map<Integer, VertexFormat> formats = new TreeMap<>();
+        this.bindings.forEach((slot, binding) -> formats.put(slot, binding.format())); return Collections.unmodifiableMap(formats);
     }
-
-    /**
-     * Clears the specified render type.
-     *
-     * @param renderType The render type to clear
-     * @since 1.2.0
-     */
-    public void clear(RenderType renderType) {
-        ShaderInstance shader = RenderSystem.getShader();
-        if (shader != null) {
-            shader.clear();
-        }
-        renderType.clearRenderState();
+    public @Nullable GpuBuffer vertexBuffer(int binding) { this.ensureOpen(); var value = this.bindings.get(binding); return value == null ? null : value.data().buffer(); }
+    public @Nullable GpuBufferSlice indexBuffer() { this.ensureOpen(); return this.indices; }
+    public int getIndexCount() { this.ensureOpen(); return this.indexCount; }
+    public int getVertexCount() { this.ensureOpen(); return this.vertexCount; }
+    public IndexType getIndexType() { this.ensureOpen(); return this.indexType; }
+    public PrimitiveTopology getDrawMode() { this.ensureOpen(); return this.topology; }
+    public void setDrawMode(PrimitiveTopology mode) { this.ensureOpen(); this.topology = Objects.requireNonNull(mode); }
+    public void setVertexCount(int count) { this.ensureOpen(); if (count < 0) throw new IllegalArgumentException("Negative vertex count"); this.vertexCount = count; }
+    public void setIndexCount(int count, IndexType type) {
+        this.ensureOpen(); Objects.requireNonNull(type);
+        if (count < 0 || this.indices != null && (long) count * type.bytes > this.indices.length()) throw new IllegalArgumentException("Index count exceeds selected storage");
+        this.indexCount = count; this.indexType = type;
     }
-
-    /**
-     * Creates a new buffer object owned by this vertex array or retrieves an existing buffer.
-     *
-     * @param index The index of the buffer to get
-     * @return A vertex array object
-     */
-    public int getOrCreateBuffer(int index) {
-        if (index < 0) {
-            throw new ArrayIndexOutOfBoundsException(index);
-        }
-        return this.buffers.computeIfAbsent(index, unused -> GlStateManager._glGenBuffers());
+    public void setVertexBuffer(int slot, GpuBufferSlice data, VertexFormat format) {
+        this.ensureOpen(); VertexArrayBuilder.validate(slot, data, format);
+        GpuBuffer previous = this.owned.get(slot);
+        if (previous != data.buffer()) { this.owned.remove(slot); this.retire(previous); }
+        this.bindings.put(slot, new VertexArrayBuilder.Binding(data, format));
+        this.releaseRetired();
     }
-
-    /**
-     * @return The OpenGL id of this vertex array
-     */
-    public int getId() {
-        return this.id;
+    public void removeVertexBuffer(int slot) {
+        this.ensureOpen(); this.bindings.remove(slot); this.retire(this.owned.remove(slot));
     }
-
-    /**
-     * @return The number of indices in this array
-     */
-    public int getIndexCount() {
-        return this.indexCount;
+    public void clearVertexBuffers() { this.ensureOpen(); for (int slot : List.copyOf(this.bindings.keySet())) this.removeVertexBuffer(slot); }
+    public void setIndexBuffer(GpuBufferSlice data, IndexType type, int count) {
+        this.ensureOpen(); validateIndices(data, type, count);
+        GpuBuffer previous = this.ownedIndices;
+        if (this.ownedIndices != data.buffer()) this.ownedIndices = null;
+        this.indices = data; this.indexType = type; this.indexCount = count;
+        if (previous != data.buffer()) this.retire(previous);
     }
-
-    /**
-     * @return The data type of the index buffer
-     */
-    public IndexType getIndexType() {
-        return this.indexType;
+    private static void validateIndices(GpuBufferSlice data, IndexType type, int count) {
+        Objects.requireNonNull(data); Objects.requireNonNull(type);
+        if (data.buffer().isClosed() || (data.buffer().usage() & GpuBuffer.USAGE_INDEX) == 0) throw new IllegalArgumentException("Index binding requires live native index storage");
+        if (count < 0 || data.offset() % type.bytes != 0 || (long) count * type.bytes > data.length()) throw new IllegalArgumentException("Invalid typed index range");
     }
-
-    /**
-     * @return The GL polygon draw type
-     * @see #setDrawMode(VertexFormat.Mode)
-     */
-    public VertexFormat.Mode getDrawMode() {
-        return this.drawMode;
+    private GpuBuffer allocate(CommandEncoder encoder, ByteBuffer bytes, int usage, String suffix) {
+        if (!bytes.hasRemaining()) throw new IllegalArgumentException("Native mesh storage must be nonempty");
+        GpuBuffer buffer = this.device.createBuffer(() -> this.label + suffix, usage | GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_COPY_SRC, bytes.remaining());
+        try { encoder.writeToBuffer(buffer.slice(), bytes.duplicate()); return buffer; }
+        catch (RuntimeException | Error failure) { buffer.close(); throw failure; }
     }
-
-    /**
-     * Uploads mesh data into the specified buffer.
-     *
-     * @param data  The data to upload
-     * @param usage The draw usage
-     */
-    public static void upload(int buffer, ByteBuffer data, DrawUsage usage) {
-        if (VeilRenderSystem.directStateAccessSupported()) {
-            glNamedBufferData(buffer, data, usage.getGlType());
-        } else {
-            glBindBuffer(GL_ARRAY_BUFFER, buffer);
-            glBufferData(GL_ARRAY_BUFFER, data, usage.getGlType());
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
+    /** Every replacement owns separate storage so retained/recorded earlier draws keep their bytes. */
+    public void uploadVertexBuffer(CommandEncoder encoder, int slot, ByteBuffer bytes, VertexFormat format, DrawUsage usage) {
+        this.ensureOpen(); Objects.requireNonNull(usage); Objects.requireNonNull(format);
+        if (slot < 0 || slot >= RenderPass.MAX_VERTEX_BUFFERS || format.getVertexSize() <= 0 || bytes.remaining() % format.getVertexSize() != 0)
+            throw new IllegalArgumentException("Invalid vertex binding/stride");
+        GpuBuffer replacement = this.allocate(encoder, bytes, GpuBuffer.USAGE_VERTEX, "/vertices/" + slot);
+        GpuBuffer previous = this.owned.put(slot, replacement);
+        this.bindings.put(slot, new VertexArrayBuilder.Binding(replacement.slice(), format)); this.retire(previous);
+        if (slot == 0 && format.getStepRate() == 0) this.vertexCount = bytes.remaining() / format.getVertexSize();
+    }
+    public void uploadIndexBuffer(CommandEncoder encoder, ByteBuffer bytes, IndexType type) {
+        this.ensureOpen(); Objects.requireNonNull(type);
+        if (bytes.remaining() % type.bytes != 0) throw new IllegalArgumentException("Partial native index element");
+        GpuBuffer replacement = this.allocate(encoder, bytes, GpuBuffer.USAGE_INDEX, "/indices");
+        GpuBuffer previous = this.ownedIndices;
+        this.ownedIndices = replacement; this.indices = replacement.slice(); this.indexType = type; this.indexCount = bytes.remaining() / type.bytes;
+        this.retire(previous);
+    }
+    /** Consumes the real Minecraft mesh, including sorted indices or the actual sequential topology pattern. */
+    public void upload(CommandEncoder encoder, MeshData data, DrawUsage usage) {
+        this.ensureOpen(); Objects.requireNonNull(usage);
+        try (data) {
+            var state = data.drawState();
+            if (state.vertexCount() == 0 || state.indexCount() == 0) throw new IllegalArgumentException("Cannot upload an empty mesh");
+            ByteBuffer vertices = data.vertexBuffer();
+            if (vertices.remaining() != Math.multiplyExact(state.vertexCount(), state.format().getVertexSize())) throw new IllegalArgumentException("Minecraft mesh vertex size mismatch");
+            ByteBuffer indexBytes = data.indexBuffer();
+            IndexType type = state.indexType();
+            if (indexBytes == null) indexBytes = sequential(state);
+            if (indexBytes.remaining() != Math.multiplyExact(state.indexCount(), type.bytes)) throw new IllegalArgumentException("Minecraft mesh index size mismatch");
+            GpuBuffer newVertices = this.allocate(encoder, vertices, GpuBuffer.USAGE_VERTEX, "/vertices/0");
+            GpuBuffer newIndices;
+            try { newIndices = this.allocate(encoder, indexBytes, GpuBuffer.USAGE_INDEX, "/indices"); }
+            catch (RuntimeException | Error failure) { newVertices.close(); throw failure; }
+            this.retire(this.owned.put(0, newVertices)); this.retire(this.ownedIndices);
+            this.bindings.put(0, new VertexArrayBuilder.Binding(newVertices.slice(), state.format()));
+            this.ownedIndices = newIndices; this.indices = newIndices.slice();
+            this.vertexCount = state.vertexCount(); this.indexCount = state.indexCount(); this.indexType = type; this.topology = state.primitiveTopology();
+            this.releaseRetired();
         }
     }
-
-    /**
-     * Uploads vanilla mc mesh data into this vertex array. Only a single mesh can be uploaded this way.
-     *
-     * @param meshData The data to upload
-     * @param usage    The draw usage
-     */
-    public void upload(MeshData meshData, DrawUsage usage) {
-        this.upload(0, meshData, usage);
+    private static ByteBuffer sequential(MeshData.DrawState state) {
+        if (state.indexCount() != state.primitiveTopology().indexCount(state.vertexCount())) throw new IllegalArgumentException("Invalid sequential Minecraft topology");
+        ByteBuffer bytes = ByteBuffer.allocateDirect(Math.multiplyExact(state.indexCount(), state.indexType().bytes)).order(ByteOrder.nativeOrder());
+        boolean quads = state.primitiveTopology() == PrimitiveTopology.QUADS;
+        boolean lines = state.primitiveTopology() == PrimitiveTopology.LINES;
+        if (quads || lines) {
+            if (state.vertexCount() % 4 != 0) throw new IllegalArgumentException("Incomplete sequential quad/line primitive");
+            int[] pattern = quads ? new int[]{0, 1, 2, 2, 3, 0} : new int[]{0, 1, 2, 3, 2, 1};
+            for (int vertex = 0; vertex < state.vertexCount(); vertex += 4) for (int index : pattern) putIndex(bytes, state.indexType(), vertex + index);
+        } else for (int index = 0; index < state.indexCount(); index++) putIndex(bytes, state.indexType(), index);
+        return bytes.flip();
     }
-
-    /**
-     * Uploads vanilla mc mesh data into this vertex array. Only a single mesh can be uploaded this way.
-     *
-     * @param attributeStart The attribute to start uploading vertex data to
-     * @param meshData       The data to upload
-     * @param usage          The draw usage
-     */
-    public void upload(int attributeStart, MeshData meshData, DrawUsage usage) {
-        try (meshData) {
-            RenderSystem.assertOnRenderThread();
-            MeshData.DrawState drawState = meshData.drawState();
-            VertexArrayBuilder builder = this.editFormat();
-
-            int vertexBuffer = this.getOrCreateBuffer(VERTEX_BUFFER);
-            upload(vertexBuffer, meshData.vertexBuffer(), usage);
-            builder.applyFrom(VERTEX_BUFFER, vertexBuffer, attributeStart, drawState.format());
-
-            ByteBuffer indexBuffer = meshData.indexBuffer();
-            if (indexBuffer != null) {
-                this.uploadIndexBuffer(indexBuffer);
-            } else {
-                this.uploadIndexBuffer(drawState);
-            }
-
-            this.indexCount = drawState.indexCount();
-            this.indexType = IndexType.fromBlaze3D(drawState.indexType());
-            this.drawMode = drawState.mode();
-        }
+    private static void putIndex(ByteBuffer bytes, IndexType type, int index) { if (type == IndexType.SHORT) bytes.putShort((short) index); else bytes.putInt(index); }
+    public Draw retain() {
+        this.ensureOpen(); this.validate(); this.leases++;
+        return new Draw(Map.copyOf(this.bindings), this.indices, this.indexType, this.topology, this.indexCount, this.vertexCount);
     }
-
-    /**
-     * Uploads index data to the vertex array.
-     *
-     * @param drawState The buffer draw state
-     */
-    public void uploadIndexBuffer(MeshData.DrawState drawState) {
-        this.indexBuffer = RenderSystem.getSequentialBuffer(drawState.mode());
-        this.indexBuffer.bind(drawState.indexCount());
+    private void validate() {
+        if (this.bindings.isEmpty()) throw new IllegalStateException("Mesh has no native vertex bindings");
+        this.bindings.forEach((slot, binding) -> VertexArrayBuilder.validate(slot, binding.data(), binding.format()));
+        if (this.indices != null) validateIndices(this.indices, this.indexType, this.indexCount);
+        if (this.vertexCount <= 0) throw new IllegalStateException("Mesh has no vertices");
     }
-
-    /**
-     * Uploads index data to the vertex array.
-     *
-     * @param data The data to upload
-     */
-    public void uploadIndexBuffer(ByteBuffer data) {
-        this.indexBuffer = null;
-        GlStateManager._glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, this.getOrCreateBuffer(ELEMENT_ARRAY_BUFFER));
-        RenderSystem.glBufferData(GL_ELEMENT_ARRAY_BUFFER, data, GL_STATIC_DRAW);
+    /** Immediate recording: the owner must remain unchanged/alive through encoder submission. */
+    public void draw(RenderPass pass) { this.drawInstanced(pass, 1); }
+    public void drawInstanced(RenderPass pass, int instances) {
+        this.ensureOpen(); this.validate();
+        draw(pass, this.bindings, this.indices, this.indexType, this.indexCount, this.vertexCount, instances);
     }
-
-    /**
-     * Uploads index data to the vertex array.
-     *
-     * @param data      The data to upload
-     * @param indexType The type of data stored in data
-     * @since 1.2.0
-     */
-    public void uploadIndexBuffer(ByteBuffer data, IndexType indexType) {
-        this.uploadIndexBuffer(data);
-        this.setIndexCount(data.remaining() >> indexType.ordinal(), indexType);
+    private static void draw(RenderPass pass, Map<Integer, VertexArrayBuilder.Binding> bindings, @Nullable GpuBufferSlice indices, IndexType type, int count, int vertices, int instances) {
+        if (instances < 0) throw new IllegalArgumentException("Negative instance count");
+        bindings.forEach((slot, binding) -> {
+            int step = binding.format().getStepRate();
+            long elements = step == 0 ? vertices : Math.floorDiv((long) instances + step - 1, step);
+            if (elements * binding.format().getVertexSize() > binding.data().length()) throw new IllegalArgumentException("Native mesh draw exceeds vertex/instance storage at binding " + slot);
+        });
+        bind(pass, bindings, indices, type);
+        if (indices != null) pass.drawIndexed(count, instances, Math.toIntExact(indices.offset() / type.bytes), 0, 0);
+        else pass.draw(vertices, instances, 0, 0);
     }
-
-    /**
-     * @return A builder for applying changes to this array
-     */
-    public VertexArrayBuilder editFormat() {
-        this.bind();
-        return this.builder;
+    private static void bind(RenderPass pass, Map<Integer, VertexArrayBuilder.Binding> bindings, @Nullable GpuBufferSlice indices, IndexType type) {
+        bindings.forEach((slot, binding) -> {
+            if (binding.data().buffer().isClosed()) throw new IllegalStateException("Native vertex storage expired");
+            pass.setVertexBuffer(slot, binding.data());
+        });
+        if (indices != null) { if (indices.buffer().isClosed()) throw new IllegalStateException("Native index storage expired"); pass.setIndexBuffer(indices.buffer(), type); }
     }
-
-    /**
-     * Binds this vertex array and applies any changes to the format automatically.
-     */
-    public void bind() {
-        VeilRenderSystem.bindVertexArray(this.id);
-
-        // Because the auto index buffers can decide to change formats occasionally, this is needed to keep the type correct
-        if (this.indexBuffer != null) {
-            IndexType expectedIndexType = IndexType.fromBlaze3D(this.indexBuffer.type());
-            if (this.indexType != expectedIndexType) {
-                this.indexBuffer.bind(this.indexCount);
-                this.indexType = expectedIndexType;
-            }
-        }
+    private void retire(@Nullable GpuBuffer buffer) { if (buffer != null) this.retired.add(buffer); this.releaseRetired(); }
+    private void releaseRetired() {
+        if (this.leases != 0) return;
+        this.retired.removeIf(buffer -> {
+            if (this.indices != null && this.indices.buffer() == buffer || this.bindings.values().stream().anyMatch(binding -> binding.data().buffer() == buffer)) return false;
+            buffer.close(); return true;
+        });
     }
-
-    /**
-     * Unbinds the current vertex array.
-     */
-    public static void unbind() {
-        VeilRenderSystem.bindVertexArray(0);
+    private void release() {
+        if (--this.leases == 0) { this.releaseRetired(); if (this.closeRequested) this.dispose(); }
     }
-
-    /**
-     * Draws {@link #indexCount} number of indices with the previously defined draw mode.
-     * <br>
-     * {@link #bind()} must be called before this.
-     */
-    public void draw() {
-        ShaderProgram shader = VeilRenderSystem.getShader();
-        if (shader != null && shader.hasTesselation() && shader.getProgram() == glGetInteger(GL_CURRENT_PROGRAM)) {
-            if (this.drawMode == VertexFormat.Mode.QUADS) {
-                // Quads are internally switched to triangles with indices in vanilla mc, so just use draw arrays
-                // This will be wrong if custom indices are used! (transparent objects)
-                glDrawArrays(GL_PATCHES, 0, this.indexCount * 4 / 6);
-                return;
-            }
-
-            glDrawElements(GL_PATCHES, this.indexCount, this.indexType.getGlType(), 0L);
-            return;
-        }
-
-        glDrawElements(this.drawMode.asGLMode, this.indexCount, this.indexType.getGlType(), 0L);
+    @Override public void free() { this.close(); }
+    @Override public void close() { if (this.closed || this.closeRequested) return; this.closeRequested = true; if (this.leases == 0) this.dispose(); }
+    private void dispose() {
+        Set<GpuBuffer> buffers = Collections.newSetFromMap(new IdentityHashMap<>());
+        buffers.addAll(this.owned.values()); buffers.addAll(this.retired);
+        if (this.ownedIndices != null) buffers.add(this.ownedIndices);
+        buffers.forEach(GpuBuffer::close); this.owned.clear(); this.retired.clear(); this.ownedIndices = null;
+        this.bindings.clear(); this.indices = null; this.closed = true;
     }
-
-    /**
-     * Draws {@link #indexCount} number of indices with the previously defined draw mode a number of times.
-     * <br>
-     * {@link #bind()} must be called before this.
-     *
-     * @param instances The number of instances to draw
-     */
-    public void drawInstanced(int instances) {
-        ShaderProgram shader = VeilRenderSystem.getShader();
-        if (shader != null && shader.hasTesselation() && shader.getProgram() == glGetInteger(GL_CURRENT_PROGRAM)) {
-            if (this.drawMode == VertexFormat.Mode.QUADS) {
-                // Quads are internally switched to triangles with indices in vanilla mc, so just use draw arrays
-                // This will be wrong if custom indices are used! (transparent objects)
-                glDrawArraysInstanced(GL_PATCHES, 0, this.indexCount * 4 / 6, instances);
-                return;
-            }
-
-            glDrawElementsInstanced(GL_PATCHES, this.indexCount, this.indexType.getGlType(), 0L, instances);
-            return;
+    /** Retained immutable binding selection; close after the encoder using it has been submitted. */
+    public final class Draw implements AutoCloseable {
+        private final Map<Integer, VertexArrayBuilder.Binding> bindings;
+        private final @Nullable GpuBufferSlice indices;
+        private final IndexType indexType;
+        private final PrimitiveTopology topology;
+        private final int indexCount, vertexCount;
+        private boolean closed;
+        private Draw(Map<Integer, VertexArrayBuilder.Binding> bindings, @Nullable GpuBufferSlice indices, IndexType type, PrimitiveTopology topology, int count, int vertices) {
+            this.bindings = bindings; this.indices = indices; this.indexType = type; this.topology = topology; this.indexCount = count; this.vertexCount = vertices;
         }
-
-        glDrawElementsInstanced(this.drawMode.asGLMode, this.indexCount, this.indexType.getGlType(), 0L, instances);
+        private void ensureOpen() { if (this.closed) throw new IllegalStateException("Mesh draw lease is closed"); }
+        public void validatePipeline(RenderPipeline pipeline) {
+            this.ensureOpen();
+            if (pipeline.getPrimitiveTopology() != this.topology) throw new IllegalArgumentException("Mesh and pipeline topology differ");
+            this.bindings.forEach((slot, binding) -> {
+                if (slot >= pipeline.getVertexFormatBindings().size() || !binding.format().equals(pipeline.getVertexFormatBinding(slot)))
+                    throw new IllegalArgumentException("Mesh and pipeline vertex layout differ at binding " + slot);
+            });
+            for (int slot = 0; slot < pipeline.getVertexFormatBindings().size(); slot++)
+                if (pipeline.getVertexFormatBinding(slot) != null && !this.bindings.containsKey(slot)) throw new IllegalArgumentException("Missing native mesh binding: " + slot);
+        }
+        public void draw(RenderPass pass) { this.drawInstanced(pass, 1); }
+        public void drawInstanced(RenderPass pass, int instances) {
+            this.ensureOpen(); VertexArray.draw(pass, this.bindings, this.indices, this.indexType, this.indexCount, this.vertexCount, instances);
+        }
+        /** The native indirect range is tightly packed, with genuine indexed/nonindexed command structures. */
+        public void drawIndirect(RenderPass pass, GpuBufferSlice commands, int count) {
+            this.ensureOpen();
+            int stride = this.indices == null ? RenderPass.INDIRECT_DRAW_SIZE : RenderPass.INDIRECT_INDEXED_DRAW_SIZE;
+            if (commands.buffer().isClosed() || (commands.buffer().usage() & GpuBuffer.USAGE_INDIRECT_PARAMETERS) == 0 || count < 0 || commands.offset() % 4 != 0 || commands.length() < (long) count * stride)
+                throw new IllegalArgumentException("Invalid native indirect command range");
+            if (this.indices != null && this.indices.offset() != 0) throw new IllegalArgumentException("Indirect indexed commands require a full index-buffer origin; firstIndex belongs to the native command");
+            bind(pass, this.bindings, this.indices, this.indexType);
+            if (this.indices == null) pass.drawIndirect(commands, count); else pass.drawIndexedIndirect(commands, count);
+        }
+        /** Uses real native type preparation/layers; keep this Draw retained until any deferred type queue is submitted. */
+        public void drawWithRenderType(RenderPass pass, RenderType type) {
+            type.prepare().drawFromBuffer(this.stagedGeometry(type), pass);
+        }
+        /** Immutable native geometry descriptor. Keep this Draw retained until its commands are submitted. */
+        public StagedVertexBuffer.ExecuteInfo stagedGeometry(RenderType type) {
+            this.ensureOpen();
+            if (this.bindings.size() != 1 || !this.bindings.containsKey(0) || this.indices == null) throw new IllegalStateException("PreparedRenderType requires one indexed vertex binding; bind a native instanced pipeline explicitly");
+            var vertices = this.bindings.get(0);
+            if (!vertices.format().equals(type.format()) || this.topology != type.primitiveTopology() || vertices.data().offset() % vertices.format().getVertexSize() != 0)
+                throw new IllegalArgumentException("Native type and mesh layout/topology differ");
+            return new StagedVertexBuffer.ExecuteInfo(vertices.data().buffer(), this.indices.buffer(), this.indexType,
+                    Math.toIntExact(vertices.data().offset() / vertices.format().getVertexSize()), Math.toIntExact(this.indices.offset() / this.indexType.bytes), this.indexCount, this.topology);
+        }
+        @Override public void close() { if (!this.closed) { this.closed = true; VertexArray.this.release(); } }
     }
-
-    /**
-     * Draws {@link #indexCount} number of indices with the previously defined draw mode a number of times.
-     * <br>
-     * {@link #bind()} must be called before this.
-     * <br>
-     * <strong>Note: This only works if {@link VeilRenderSystem#multiDrawIndirectSupported()} is <code>true</code></strong>
-     *
-     * @param indirect  A pointer into the currently bound {@link GL40C#GL_DRAW_INDIRECT_BUFFER} or the address of a struct containing draw data
-     * @param drawCount The number of instances to draw
-     * @param stride    The stride between commands or <code>0</code> if they are tightly packed
-     */
-    public void drawIndirect(long indirect, int drawCount, int stride) {
-        if (!VeilRenderSystem.multiDrawIndirectSupported()) {
-            throw new UnsupportedOperationException("Indirect rendering is not supported");
-        }
-
-        glMultiDrawElementsIndirect(this.drawMode.asGLMode, this.indexType.getGlType(), indirect, drawCount, stride);
-    }
-
-    /**
-     * Draws {@link #indexCount} number of indices with the previously defined draw mode.
-     * This method applies the specified render type automatically.
-     * <br>
-     * {@link #bind()} must be called before this.
-     */
-    public void drawWithRenderType(RenderType renderType) {
-        while (renderType instanceof VeilRenderType.RenderTypeWrapper wrapper) {
-            renderType = wrapper.get();
-        }
-
-        if (renderType == null) {
-            return;
-        }
-
-        this.setup(renderType);
-        this.draw();
-        this.clear(renderType);
-
-        if (renderType instanceof VeilRenderType.LayeredRenderType layeredRenderType) {
-            for (RenderType layer : layeredRenderType.getLayers()) {
-                this.setup(layer);
-                this.draw();
-                this.clear(layer);
-            }
-        }
-    }
-
-    /**
-     * Draws {@link #indexCount} number of indices with the previously defined draw mode a number of times.
-     * This method applies the specified render type automatically.
-     * <br>
-     * {@link #bind()} must be called before this.
-     *
-     * @param instances The number of instances to draw
-     */
-    public void drawInstancedWithRenderType(RenderType renderType, int instances) {
-        while (renderType instanceof VeilRenderType.RenderTypeWrapper wrapper) {
-            renderType = wrapper.get();
-        }
-
-        if (renderType == null) {
-            return;
-        }
-
-        this.setup(renderType);
-        this.drawInstanced(instances);
-        this.clear(renderType);
-
-        if (renderType instanceof VeilRenderType.LayeredRenderType layeredRenderType) {
-            for (RenderType layer : layeredRenderType.getLayers()) {
-                this.setup(layer);
-                this.drawInstanced(instances);
-                this.clear(layer);
-            }
-        }
-    }
-
-    /**
-     * Draws {@link #indexCount} number of indices with the previously defined draw mode a number of times.
-     * This method applies the specified render type automatically.
-     * <br>
-     * {@link #bind()} must be called before this.
-     * <br>
-     * <strong>Note: This only works if {@link VeilRenderSystem#multiDrawIndirectSupported()} is <code>true</code></strong>
-     *
-     * @param indirect  A pointer into the currently bound {@link GL40C#GL_DRAW_INDIRECT_BUFFER} or the address of a struct containing draw data
-     * @param drawCount The number of instances to draw
-     * @param stride    The stride between commands or <code>0</code> if they are tightly packed
-     */
-    public void drawIndirectWithRenderType(RenderType renderType, long indirect, int drawCount, int stride) {
-        while (renderType instanceof VeilRenderType.RenderTypeWrapper wrapper) {
-            renderType = wrapper.get();
-        }
-
-        if (renderType == null) {
-            return;
-        }
-
-        this.setup(renderType);
-        this.drawIndirect(indirect, drawCount, stride);
-        this.clear(renderType);
-
-        if (renderType instanceof VeilRenderType.LayeredRenderType layeredRenderType) {
-            for (RenderType layer : layeredRenderType.getLayers()) {
-                this.setup(layer);
-                this.drawIndirect(indirect, drawCount, stride);
-                this.clear(layer);
-            }
-        }
-    }
-
-    /**
-     * Sets the number of indices and what data type they are.
-     *
-     * @param indexCount The number of indices in the entire mesh
-     * @param indexType  The data type of the indices
-     */
-    public void setIndexCount(int indexCount, IndexType indexType) {
-        this.indexCount = indexCount;
-        this.indexType = indexType;
-    }
-
-    /**
-     * Sets the type of polygons draw calls will draw.
-     *
-     * @param drawMode The new draw mode
-     */
-    public void setDrawMode(VertexFormat.Mode drawMode) {
-        this.drawMode = drawMode;
-    }
-
-    @Override
-    public void free() {
-        RenderSystem.assertOnRenderThreadOrInit();
-        glDeleteBuffers(this.buffers.values().toIntArray());
-        glDeleteVertexArrays(this.id);
-        this.buffers.clear();
-    }
-
-    private enum VertexArrayType {
-        LEGACY(LegacyVertexArray::new),
-        ARB(ARBVertexArray::new),
-        DSA(DSAVertexArray::new);
-
-        private final IntFunction<VertexArray> factory;
-
-        VertexArrayType(IntFunction<VertexArray> factory) {
-            this.factory = factory;
-        }
-    }
-
-    /**
-     * The type of GL indices that can be used.
-     *
-     * @author Ocelot
-     */
-    public enum IndexType {
-        BYTE(GL_UNSIGNED_BYTE),
-        SHORT(GL_UNSIGNED_SHORT),
-        INT(GL_UNSIGNED_INT);
-
-        private final int glType;
-        private final int bytes;
-
-        IndexType(int glType) {
-            this.glType = glType;
-            this.bytes = 1 << this.ordinal();
-        }
-
-        public int getGlType() {
-            return this.glType;
-        }
-
-        public int getBytes() {
-            return this.bytes;
-        }
-
-        public static IndexType fromBlaze3D(VertexFormat.IndexType type) {
-            return switch (type) {
-                case SHORT -> SHORT;
-                case INT -> INT;
-            };
-        }
-
-        public static IndexType least(int maxIndex) {
-            if ((maxIndex & 0xFFFFFF00) == 0) {
-                return BYTE;
-            }
-            if ((maxIndex & 0xFFFF0000) == 0) {
-                return SHORT;
-            }
-            return INT;
-        }
-    }
-
-    /**
-     * Specifies how the graphics card should manage buffer data.
-     *
-     * @author Ocelot
-     */
-    public enum DrawUsage {
-        /**
-         * The data is set only once and used many times.
-         */
-        STATIC(GL_STATIC_DRAW),
-        /**
-         * The data is changed a lot and used many times.
-         */
-        DYNAMIC(GL_DYNAMIC_DRAW),
-        /**
-         * The data is set only once and used by the GPU at most a few times.
-         */
-        STREAM(GL_STREAM_DRAW);
-
-        private final int glType;
-
-        DrawUsage(int glType) {
-            this.glType = glType;
-        }
-
-        public int getGlType() {
-            return this.glType;
-        }
-
-        /**
-         * Converts the given Blaze3D type to Veil draw usage.
-         *
-         * @param type The type to convert
-         * @return The Veil draw usage
-         */
-        public static DrawUsage fromBlaze3D(VertexBuffer.Usage type) {
-            return switch (type) {
-                case STATIC -> STATIC;
-                case DYNAMIC -> DYNAMIC;
-            };
-        }
-    }
+    /** Retained source hints; all native storage uses explicit COPY_DST uploads rather than GL usage enums. */
+    public enum DrawUsage { STATIC, DYNAMIC, STREAM }
 }

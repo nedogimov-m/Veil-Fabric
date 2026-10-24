@@ -1,12 +1,11 @@
 package foundry.veil.impl.client.render.shader.injection;
 
-import foundry.veil.Veil;
 import foundry.veil.impl.client.render.shader.injection.util.ShaderInjection;
 import foundry.veil.impl.client.render.shader.injection.util.ShaderInjectionDefinition;
 import foundry.veil.impl.client.render.shader.injection.util.ShaderInjectionFunction;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.resources.FileToIdConverter;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceProvider;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -27,6 +26,7 @@ import java.util.regex.Pattern;
  */
 @ApiStatus.Internal
 public final class ShaderInjectionAdapter {
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("Veil");
 
     private static final String DEFAULT_FUNCTION = "main";
     private static final int DEFAULT_PARAM_COUNT = -1;
@@ -36,9 +36,9 @@ public final class ShaderInjectionAdapter {
     private static final Set<String> DEBUG_LOGGED = new HashSet<>();
 
     public static List<ShaderInjection> toModifications(ShaderInjectionDefinition definition, ResourceProvider provider) throws IOException {
-        List<ResourceLocation> redirects = definition.redirects();
+        List<Identifier> redirects = definition.redirects();
         List<ShaderInjection> mods = new ObjectArrayList<>(redirects.size());
-        for (ResourceLocation path : redirects) {
+        for (Identifier path : redirects) {
             String code = loadGlsl(path, provider);
             mods.add(buildModification(definition, code));
         }
@@ -50,7 +50,7 @@ public final class ShaderInjectionAdapter {
         InjectionBodyParser.Result parsed = InjectionBodyParser.parse(code);
 
         if (parsed.body().isEmpty() && parsed.globals().isEmpty()) {
-            Veil.LOGGER.warn("Shader injection '{}' target '{}' has no head() or tail() marker — skipping", def.id(), def.target());
+            LOGGER.warn("Shader injection '{}' target '{}' has no head() or tail() marker — skipping", def.id(), def.target());
             return new SimpleShaderInjection(parsed.version(), def.priority(), new ShaderInjectionFunction[0], null);
         }
 
@@ -61,19 +61,19 @@ public final class ShaderInjectionAdapter {
             if (!parsed.globals().isEmpty()) {
                 sb.append("  Globals: ").append(parsed.globals().replace("\n", "\n           "));
             }
-            Veil.LOGGER.info(sb.toString());
+            LOGGER.info(sb.toString());
         }
 
         ShaderInjectionFunction func = new ShaderInjectionFunction(DEFAULT_FUNCTION, DEFAULT_PARAM_COUNT, parsed.isHead(), parsed.body());
         return new SimpleShaderInjection(parsed.version(), def.priority(), new ShaderInjectionFunction[]{func}, parsed.globals().isEmpty() ? null : parsed.globals());
     }
 
-    private static String loadGlsl(ResourceLocation path, ResourceProvider provider) throws IOException {
-        ResourceLocation fullPath = ResourceLocation.fromNamespaceAndPath(path.getNamespace(), "pinwheel/shader_injection/" + path.getPath());
+    private static String loadGlsl(Identifier path, ResourceProvider provider) throws IOException {
+        Identifier fullPath = Identifier.fromNamespaceAndPath(path.getNamespace(), "pinwheel/shader_injection/" + path.getPath());
         return resolveIncludes(fullPath, provider, new HashSet<>());
     }
 
-    private static String resolveIncludes(ResourceLocation loc, ResourceProvider provider, Set<ResourceLocation> visited) throws IOException {
+    private static String resolveIncludes(Identifier loc, ResourceProvider provider, Set<Identifier> visited) throws IOException {
         if (!visited.add(loc)) {
             return "";
         }
@@ -91,8 +91,8 @@ public final class ShaderInjectionAdapter {
         for (String line : source.split("\n", -1)) {
             Matcher m = INCLUDE_PATTERN.matcher(line);
             if (m.matches()) {
-                ResourceLocation includeId = ResourceLocation.parse(m.group(1));
-                ResourceLocation includePath = INCLUDE_LISTER.idToFile(includeId);
+                Identifier includeId = Identifier.parse(m.group(1));
+                Identifier includePath = INCLUDE_LISTER.idToFile(includeId);
                 out.append(resolveIncludes(includePath, provider, visited));
             } else {
                 out.append(line).append('\n');

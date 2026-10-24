@@ -1,6 +1,5 @@
 package foundry.veil.api.resource.editor;
 
-import foundry.imgui.api.ImGuiMC;
 import foundry.veil.Veil;
 import foundry.veil.api.client.imgui.VeilImGuiUtil;
 import foundry.veil.api.resource.VeilEditorEnvironment;
@@ -12,7 +11,7 @@ import imgui.ImGui;
 import imgui.flag.ImGuiSelectableFlags;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
 import org.jetbrains.annotations.ApiStatus;
@@ -51,7 +50,7 @@ public class ResourceOverrideEditor implements ResourceFileEditor<VeilResource<?
                 continue;
             }
 
-            ResourceLocation location = this.veilResource.resourceInfo().location();
+            Identifier location = this.veilResource.resourceInfo().location();
             for (Path devRoot : packRoots) {
                 this.options.add(devRoot.resolve(PackType.CLIENT_RESOURCES.getDirectory())
                         .resolve(location.getNamespace())
@@ -72,7 +71,7 @@ public class ResourceOverrideEditor implements ResourceFileEditor<VeilResource<?
             return;
         }
 
-        ImGuiMC.component(NAME);
+        VeilImGuiUtil.component(NAME);
 
         VeilResourceManager resourceManager = this.environment.getResourceManager();
         for (Path writePath : this.options) {

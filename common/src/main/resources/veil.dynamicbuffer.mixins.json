@@ -2,14 +2,15 @@
   "required": true,
   "minVersion": "0.8",
   "package": "foundry.veil.mixin.dynamicbuffer",
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_25",
   "plugin": "foundry.veil.VeilMixinPluginImpl",
   "client": [
-    "accessor.DynamicBufferGameRendererAccessor",
-    "client.DynamicBufferLevelRendererMixin"
+    "client.NativeDynamicEncoderMixin",
+    "client.NativeDynamicPassMixin",
+    "client.NativeDynamicLevelRendererMixin",
+    "client.NativeDynamicOitProviderMixin"
   ],
   "injectors": {
     "defaultRequire": 1
   }
 }
-  

@@ -8,7 +8,7 @@ import foundry.veil.Veil;
 import io.github.ocelot.glslprocessor.api.grammar.GlslTypeSpecifier;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.ExtraCodecs;
 import org.joml.*;
 
@@ -157,14 +157,14 @@ public class CodecUtil {
     public static <T> Codec<T> registryOrLegacyCodec(Registry<T> registry) {
         Codec<T> legacyCodec = Codec.STRING
                 .comapFlatMap(
-                        name -> ResourceLocation.read(Veil.MODID + ":" + name.toLowerCase(Locale.ROOT)),
-                        ResourceLocation::toString)
+                        name -> Identifier.read(Veil.MODID + ":" + name.toLowerCase(Locale.ROOT)),
+                        Identifier::toString)
                 .flatXmap(
-                        loc -> Optional.ofNullable(registry.get(loc))
+                        loc -> Optional.ofNullable(registry.getValue(loc))
                                 .map(DataResult::success)
                                 .orElseGet(() -> DataResult.error(() -> "Unknown registry key in " + registry.key() + ": " + loc)),
                         object -> registry.getResourceKey(object)
-                                .map(ResourceKey::location)
+                                .map(ResourceKey::identifier)
                                 .map(DataResult::success)
                                 .orElseGet(() -> DataResult.error(() -> "Unknown registry element in " + registry.key() + ":" + object)));
 

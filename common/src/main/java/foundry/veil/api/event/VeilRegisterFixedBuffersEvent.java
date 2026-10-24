@@ -1,11 +1,11 @@
 package foundry.veil.api.event;
 
-import net.minecraft.client.renderer.RenderType;
-import org.jetbrains.annotations.Nullable;
+import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
+import java.util.function.BiConsumer;
 
 /**
- * <p>Fired to register additional fixed render types.</p>
- * <p>Fixed buffers are batched together and are not drawn until after the specified stage is drawn. This should be used in most cases to defer a specific render type to a specific time.</p>
+ * Registers persistent geometry submission callbacks. Each callback receives the actual native
+ * ordered collector during COLLECT_SUBMITS; native feature phases own staging and execution.
  *
  * @author Ocelot
  */
@@ -13,26 +13,21 @@ import org.jetbrains.annotations.Nullable;
 public interface VeilRegisterFixedBuffersEvent {
 
     /**
-     * Registers fixed render types. The stage determines when the buffer should be finished and the render type is the layer to finish.
+     * Registers persistent callbacks for native world geometry collection.
      *
-     * @param registry The registry to add render types to
+     * @param registry the registry for callbacks and their native feature order
      */
     void onRegisterFixedBuffers(Registry registry);
 
     /**
-     * Registers additional fixed render buffers.
+     * Registers additional native geometry submissions.
      *
      * @author Ocelot
      */
     @FunctionalInterface
     interface Registry {
 
-        /**
-         * Registers the specified render type as a fixed buffer. That means all render calls using it will be batched until the specified stage is drawn.
-         *
-         * @param stage      The stage to draw the buffer after or <code>null</code> to do it manually
-         * @param renderType The render type to register
-         */
-        void registerFixedBuffer(@Nullable VeilRenderLevelStageEvent.Stage stage, RenderType renderType);
+        /** Register once; the callback submits immutable native geometry for each actual world view. */
+        void registerSubmission(int order, BiConsumer<VeilRenderLevelStageEvent.Context, OrderedSubmitNodeCollector> submission);
     }
 }

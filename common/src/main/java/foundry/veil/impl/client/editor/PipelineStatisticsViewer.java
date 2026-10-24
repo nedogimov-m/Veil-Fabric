@@ -1,6 +1,5 @@
 package foundry.veil.impl.client.editor;
 
-import foundry.imgui.api.ImGuiMC;
 import foundry.veil.api.client.editor.Inspector;
 import foundry.veil.api.client.imgui.VeilImGuiUtil;
 import foundry.veil.api.client.render.VeilRenderSystem;
@@ -25,8 +24,6 @@ import java.util.Set;
 @ApiStatus.Internal
 public class PipelineStatisticsViewer implements Inspector {
 
-    private static final ImPlotSpec PLOT_SPEC = new ImPlotSpec();
-
     public static final Component TITLE = Component.translatable("inspector.veil.pipeline_statistics.title");
     public static final int HISTORY_LENGTH = 200;
 
@@ -47,11 +44,11 @@ public class PipelineStatisticsViewer implements Inspector {
 
     @Override
     public boolean isEnabled() {
-        return VeilRenderSystem.pipelineStatisticsQuerySupported();
+        return VeilRenderProfilerImpl.isSupported();
     }
 
     private void renderComponents() {
-        if (!VeilRenderSystem.pipelineStatisticsQuerySupported()) {
+        if (!VeilRenderProfilerImpl.isSupported()) {
             return;
         }
 
@@ -62,7 +59,7 @@ public class PipelineStatisticsViewer implements Inspector {
         VeilRenderProfilerImpl.setEnabled(this.enabledPaths, RenderProfilerCounter.ALL);
 
         this.enabledPaths.clear();
-        this.renderCounters("", RenderProfilerCounter.FRAGMENT_SHADER_INVOCATIONS);
+        this.renderCounters("", RenderProfilerCounter.GPU_TIME_NANOS);
         this.historyIndex++;
         this.historyIndex %= HISTORY_LENGTH;
         this.getHistory(0).clear();
@@ -88,7 +85,7 @@ public class PipelineStatisticsViewer implements Inspector {
                     RenderProfilerCounter[] statistics = field.statistics();
                     long[] values = new long[HISTORY_LENGTH];
                     for (RenderProfilerCounter statistic : statistics) {
-                        if (ImPlot.beginPlot(statistic.name(), ImGui.getContentRegionAvailX(), 150, ImPlotFlags.NoFrame | ImPlotFlags.NoMouseText | ImPlotFlags.NoLegend)) {
+                        if (ImPlot.beginPlot(statistic.name()+" (ns)", ImGui.getContentRegionAvailX(), 150, ImPlotFlags.NoFrame | ImPlotFlags.NoMouseText | ImPlotFlags.NoLegend)) {
                             long max = 0;
                             for (int j = 0; j < HISTORY_LENGTH; j++) {
                                 VeilRenderProfilerImpl.ResultField past = this.getHistory(HISTORY_LENGTH - j - 1).get(label);
@@ -106,13 +103,16 @@ public class PipelineStatisticsViewer implements Inspector {
                             ImPlot.setupAxesLimits(0, HISTORY_LENGTH, 0, Math.max(max * 1.1, 10), ImPlotCond.Always);
                             ImPlot.setupAxisFormat(ImPlotAxis.Y1, "%3.0f");
 
-                            // TODO make sure this is correct
-                            final int colors = VeilImGuiUtil.colorOf(statistic.name());
-                            PLOT_SPEC.setLineColor((colors & 0xFF) / 255.0F, ((colors >> 8) & 0xFF) / 255.0F, ((colors >> 16) & 0xFF) / 255.0F, ((colors >> 24) & 0xFF) / 255.0F);
                             ImPlot.pushStyleVar(ImPlotStyleVar.PlotPadding, 0.0F, 0.0F);
                             ImPlot.pushStyleVar(ImPlotStyleVar.LabelPadding, 0.0F, 0.0F);
-                            ImPlot.plotLine(statistic.name(), values, -1, -1, PLOT_SPEC);
-                            ImPlot.popStyleVar();
+                            final var spec = new ImPlotSpec();
+                            try {
+                                spec.setLineColor(ImGui.colorConvertU32ToFloat4(VeilImGuiUtil.colorOf(statistic.name())));
+                                ImPlot.plotLine(statistic.name(), values, 1.0, 0.0, spec);
+                            } finally {
+                                spec.destroy();
+                            }
+                            ImPlot.popStyleVar(2);
 
                             ImPlot.endPlot();
                         }
@@ -120,7 +120,7 @@ public class PipelineStatisticsViewer implements Inspector {
                     ImGui.newLine();
                 }
 
-                this.renderCounters(label, sortedStatistic);
+                this.renderCounters(path.isBlank()?field.name():path+'\u001e'+field.name(), sortedStatistic);
                 ImGui.unindent();
                 ImGui.popID();
             }

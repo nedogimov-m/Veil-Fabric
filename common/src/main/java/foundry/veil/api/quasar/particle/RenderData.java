@@ -6,11 +6,11 @@ import foundry.veil.api.client.render.MatrixStack;
 import foundry.veil.api.client.render.rendertype.VeilRenderType;
 import foundry.veil.api.quasar.data.QuasarParticleData;
 import foundry.veil.api.quasar.fx.Trail;
-import net.minecraft.client.renderer.LightTexture;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.util.LightCoordsUtil;
+import foundry.veil.api.client.render.VertexSource;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.ApiStatus;
@@ -24,7 +24,7 @@ import java.util.List;
 public final class RenderData {
 
     @Deprecated
-    public static final ResourceLocation BLANK = Veil.veilPath("textures/special/blank.png");
+    public static final Identifier BLANK = Veil.veilPath("textures/special/blank.png");
 
     private final QuasarParticle particle;
     private final Vector3d prevPosition;
@@ -58,7 +58,7 @@ public final class RenderData {
         this.renderRotation = new Vector3f();
         this.prevRadius = 1.0F;
         this.renderRadius = 1.0F;
-        this.packedLight = LightTexture.FULL_BRIGHT;
+        this.packedLight = LightCoordsUtil.FULL_BRIGHT;
         this.fixedPackedLight = -1;
         this.red = 1.0F;
         this.green = 1.0F;
@@ -187,7 +187,7 @@ public final class RenderData {
 
     // TODO move to renderer
     @ApiStatus.Internal
-    public void renderTrails(MatrixStack matrixStack, MultiBufferSource bufferSource, Vec3 cameraPos, int packedLight, float partialTicks) {
+    public void renderTrails(MatrixStack matrixStack, VertexSource bufferSource, Vec3 cameraPos, int packedLight, float partialTicks) {
         if (this.trails.isEmpty()) {
             return;
         }
@@ -195,7 +195,7 @@ public final class RenderData {
         matrixStack.matrixPush();
         matrixStack.translate(-cameraPos.x(), -cameraPos.y(), -cameraPos.z());
         for (Trail trail : this.trails) {
-            trail.render(matrixStack, bufferSource.getBuffer(VeilRenderType.quasarTrail(trail.getTexture(), trail.isAdditive())), packedLight, partialTicks, new Vec3(this.particle.getPosition().x, this.particle.getPosition().y, this.particle.getPosition().z), new Vec3(this.particle.getRotation()));
+            trail.render(matrixStack, bufferSource.getBuffer(VeilRenderType.quasarTrail(trail.getTexture(), trail.isAdditive())), packedLight, partialTicks, new Vec3(this.particle.getPosition().x, this.particle.getPosition().y, this.particle.getPosition().z), new Vec3(this.particle.getRotation()), cameraPos);
         }
         matrixStack.matrixPop();
     }

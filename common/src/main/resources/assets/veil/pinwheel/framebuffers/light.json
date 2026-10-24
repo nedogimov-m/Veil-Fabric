@@ -3,5 +3,5 @@
     "type": "RENDER_BUFFER"
   },
   "autoClear": false,
-  "format": "RGB16F"
+  "format": "RGBA16F"
 }

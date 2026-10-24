@@ -3,27 +3,24 @@ package foundry.veil.api.client.render.texture;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import foundry.veil.api.client.color.Color;
-import foundry.veil.api.client.render.VeilRenderSystem;
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.api.textures.AddressMode;
+import com.mojang.renderpearl.api.textures.FilterMode;
+import com.mojang.renderpearl.api.textures.GpuSampler;
 import foundry.veil.api.util.EnumCodec;
 import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMaps;
 import org.jetbrains.annotations.Nullable;
-import org.lwjgl.system.MemoryStack;
+
 
 import java.util.Optional;
+import java.util.OptionalDouble;
 
-import static org.lwjgl.opengl.ARBDirectStateAccess.*;
-import static org.lwjgl.opengl.ARBTextureFilterAnisotropic.GL_TEXTURE_MAX_ANISOTROPY;
 import static org.lwjgl.opengl.GL11C.*;
 import static org.lwjgl.opengl.GL12C.GL_CLAMP_TO_EDGE;
-import static org.lwjgl.opengl.GL12C.GL_TEXTURE_WRAP_R;
 import static org.lwjgl.opengl.GL13C.GL_CLAMP_TO_BORDER;
 import static org.lwjgl.opengl.GL14C.*;
-import static org.lwjgl.opengl.GL30C.GL_COMPARE_REF_TO_TEXTURE;
-import static org.lwjgl.opengl.GL32C.GL_TEXTURE_CUBE_MAP_SEAMLESS;
-import static org.lwjgl.opengl.GL33C.glTexParameterIiv;
-import static org.lwjgl.opengl.GL33C.glTexParameterIuiv;
 import static org.lwjgl.opengl.GL44C.GL_MIRROR_CLAMP_TO_EDGE;
 
 /**
@@ -103,150 +100,31 @@ public record TextureFilter(boolean blur,
             EdgeType.FLOAT,
             false);
 
-    @Override
-    public float anisotropy() {
-        return Math.min(this.anisotropy, VeilRenderSystem.maxTextureAnisotropy());
+    /** Creates an independent native sampler; the caller owns and closes it. */
+    public GpuSampler createSampler(GpuDevice device) {
+        if (!Float.isFinite(this.anisotropy) || this.anisotropy < 1) {
+            throw new IllegalArgumentException("Sampler anisotropy must be finite and at least one");
+        }
+        if (this.compareFunction != null) {
+            throw new UnsupportedOperationException("RenderPearl has no hardware comparison-sampler parameter; use an explicit depth-comparison shader");
+        }
+        if (this.seamless) {
+            throw new UnsupportedOperationException("Cubemap seam filtering needs the cubemap pipeline migration");
+        }
+        int anisotropy = Math.min(device.getDeviceInfo().limits().maxAnisotropy(), (int) this.anisotropy);
+        return device.createSampler(this.wrapX.addressMode(), this.wrapY.addressMode(),
+                this.blur ? FilterMode.LINEAR : FilterMode.NEAREST,
+                this.blur ? FilterMode.LINEAR : FilterMode.NEAREST,
+                Math.max(1, anisotropy), this.mipmap ? OptionalDouble.empty() : OptionalDouble.of(0));
     }
 
-    /**
-     * @return The OpenGl filter to use when making the image smaller (minification)
-     */
+    /** Legacy serialized filter constants; native sampling uses createSampler. */
     public int minFilter() {
-        if (this.blur) {
-            return this.mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR;
-        } else {
-            return this.mipmap ? GL_NEAREST_MIPMAP_LINEAR : GL_NEAREST;
-        }
+        return this.blur ? (this.mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR)
+                : (this.mipmap ? GL_NEAREST_MIPMAP_LINEAR : GL_NEAREST);
     }
 
-    /**
-     * @return The OpenGl filter to use when making the image larger (magnification)
-     */
-    public int magFilter() {
-        return this.blur ? GL_LINEAR : GL_NEAREST;
-    }
-
-    /**
-     * Applies the filtering options to the specified texture target.
-     *
-     * @param target The target to apply filtering to
-     */
-    public void applyToTextureTarget(int target) {
-        glTexParameteri(target, GL_TEXTURE_MIN_FILTER, this.minFilter());
-        glTexParameteri(target, GL_TEXTURE_MAG_FILTER, this.magFilter());
-
-        if (VeilRenderSystem.textureAnisotropySupported()) {
-            glTexParameterf(target, GL_TEXTURE_MAX_ANISOTROPY, this.anisotropy());
-        }
-
-        if (this.compareFunction != null) {
-            glTexParameteri(target, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-            glTexParameteri(target, GL_TEXTURE_COMPARE_FUNC, this.compareFunction.id);
-        } else {
-            glTexParameteri(target, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-        }
-
-        glTexParameteri(target, GL_TEXTURE_WRAP_S, this.wrapX.id);
-        glTexParameteri(target, GL_TEXTURE_WRAP_T, this.wrapY.id);
-        glTexParameteri(target, GL_TEXTURE_WRAP_R, this.wrapZ.id);
-
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            switch (this.borderType) {
-                case FLOAT -> glTexParameterfv(
-                        target,
-                        GL_TEXTURE_BORDER_COLOR,
-                        stack.floats(
-                                ((this.borderColor >> 16) & 0xFF) / 255.0F,
-                                ((this.borderColor >> 8) & 0xFF) / 255.0F,
-                                (this.borderColor & 0xFF) / 255.0F,
-                                ((this.borderColor >> 24) & 0xFF) / 255.0F
-                        ));
-                case INT -> glTexParameterIiv(
-                        target,
-                        GL_TEXTURE_BORDER_COLOR,
-                        stack.ints(
-                                (this.borderColor >> 16) & 0xFF,
-                                (this.borderColor >> 8) & 0xFF,
-                                this.borderColor & 0xFF,
-                                (this.borderColor >> 24) & 0xFF
-                        ));
-                case UINT -> glTexParameterIuiv(
-                        target,
-                        GL_TEXTURE_BORDER_COLOR,
-                        stack.ints(
-                                (this.borderColor >> 16) & 0xFF,
-                                (this.borderColor >> 8) & 0xFF,
-                                this.borderColor & 0xFF,
-                                (this.borderColor >> 24) & 0xFF
-                        ));
-            }
-        }
-
-        if (VeilRenderSystem.textureCubeMapSeamlessSupported()) {
-            glTexParameteri(target, GL_TEXTURE_CUBE_MAP_SEAMLESS, this.seamless ? 1 : 0);
-        }
-    }
-
-    /**
-     * Applies the filtering options to the specified texture object. Only valid if {@link VeilRenderSystem#directStateAccessSupported()} is <code>true</code>.
-     *
-     * @param texture The texture to apply filtering to
-     */
-    public void applyToTexture(int texture) {
-        glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, this.minFilter());
-        glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, this.magFilter());
-
-        if (VeilRenderSystem.textureAnisotropySupported()) {
-            glTextureParameterf(texture, GL_TEXTURE_MAX_ANISOTROPY, this.anisotropy());
-        }
-
-        if (this.compareFunction != null) {
-            glTextureParameteri(texture, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-            glTextureParameteri(texture, GL_TEXTURE_COMPARE_FUNC, this.compareFunction.id);
-        } else {
-            glTextureParameteri(texture, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-        }
-
-        glTextureParameteri(texture, GL_TEXTURE_WRAP_S, this.wrapX.id);
-        glTextureParameteri(texture, GL_TEXTURE_WRAP_T, this.wrapY.id);
-        glTextureParameteri(texture, GL_TEXTURE_WRAP_R, this.wrapZ.id);
-
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            switch (this.borderType) {
-                case FLOAT -> glTextureParameterfv(
-                        texture,
-                        GL_TEXTURE_BORDER_COLOR,
-                        stack.floats(
-                                ((this.borderColor >> 16) & 0xFF) / 255.0F,
-                                ((this.borderColor >> 8) & 0xFF) / 255.0F,
-                                (this.borderColor & 0xFF) / 255.0F,
-                                ((this.borderColor >> 24) & 0xFF) / 255.0F
-                        ));
-                case INT -> glTextureParameterIiv(
-                        texture,
-                        GL_TEXTURE_BORDER_COLOR,
-                        stack.ints(
-                                (this.borderColor >> 16) & 0xFF,
-                                (this.borderColor >> 8) & 0xFF,
-                                this.borderColor & 0xFF,
-                                (this.borderColor >> 24) & 0xFF
-                        ));
-                case UINT -> glTextureParameterIuiv(
-                        texture,
-                        GL_TEXTURE_BORDER_COLOR,
-                        stack.ints(
-                                (this.borderColor >> 16) & 0xFF,
-                                (this.borderColor >> 8) & 0xFF,
-                                this.borderColor & 0xFF,
-                                (this.borderColor >> 24) & 0xFF
-                        ));
-            }
-        }
-
-        if (VeilRenderSystem.textureCubeMapSeamlessSupported()) {
-            glTextureParameteri(texture, GL_TEXTURE_CUBE_MAP_SEAMLESS, this.seamless ? 1 : 0);
-        }
-    }
+    public int magFilter() { return this.blur ? GL_LINEAR : GL_NEAREST; }
 
     /**
      * Depth-texture compare functions.
@@ -312,7 +190,14 @@ public record TextureFilter(boolean blur,
          * @return The OpenGL id of this wrap mode
          */
         public int getId() {
-            return this == MIRROR_CLAMP_TO_EDGE && !VeilRenderSystem.textureMirrorClampToEdgeSupported() ? GL_CLAMP_TO_EDGE : this.id;
+            return this.id;
+        }
+        public AddressMode addressMode() {
+            return switch (this) {
+                case CLAMP_TO_EDGE -> AddressMode.CLAMP_TO_EDGE;
+                case REPEAT -> AddressMode.REPEAT;
+                default -> throw new UnsupportedOperationException("RenderPearl sampler address mode requires shader emulation: " + this);
+            };
         }
     }
 

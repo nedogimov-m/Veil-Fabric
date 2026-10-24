@@ -1,2 +1,1 @@
-- Add quasar hot-reloading
-- Fix random particle variation
+- Fix shader recompilation with iris

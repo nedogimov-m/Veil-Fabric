@@ -1,6 +1,5 @@
 package foundry.veil.impl.resource;
 
-import foundry.imgui.api.ImGuiMC;
 import foundry.veil.api.client.imgui.VeilImGuiUtil;
 import foundry.veil.api.client.render.VeilRenderSystem;
 import foundry.veil.api.resource.VeilResource;
@@ -12,7 +11,6 @@ import imgui.flag.ImGuiCond;
 import imgui.flag.ImGuiDragDropFlags;
 import imgui.flag.ImGuiStyleVar;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import net.minecraft.Util;
 import net.minecraft.network.chat.Component;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -62,13 +60,15 @@ public class VeilResourceRenderer {
             VeilImGuiUtil.icon(0xEB91);
             ImGui.sameLine();
             ImGui.popStyleVar();
-            ImGuiMC.component(COPY_PATH);
+            VeilImGuiUtil.component(COPY_PATH);
 
             ImGui.beginDisabled(info.isStatic());
             if (ImGui.selectable("##open_folder")) {
                 Path file = info.modResourcePath() != null ? info.modResourcePath() : info.filePath();
                 if (file.getParent() != null) {
-                    Util.getPlatform().openFile(file.getParent().toFile());
+                    if (!org.lwjgl.sdl.SDLMisc.SDL_OpenURL(file.getParent().toUri().toString())) {
+                        foundry.veil.Veil.LOGGER.error("Failed to open resource folder {}: {}", file.getParent(), org.lwjgl.sdl.SDLError.SDL_GetError());
+                    }
                 }
             }
 
@@ -78,7 +78,7 @@ public class VeilResourceRenderer {
             VeilImGuiUtil.icon(0xECAF);
             ImGui.sameLine();
             ImGui.popStyleVar();
-            ImGuiMC.component(OPEN_FOLDER);
+            VeilImGuiUtil.component(OPEN_FOLDER);
             ImGui.endDisabled();
 
             for (int i = 0; i < actions.size(); i++) {
@@ -95,7 +95,7 @@ public class VeilResourceRenderer {
                     ImGui.sameLine();
                 });
                 ImGui.popStyleVar();
-                ImGuiMC.component(action.getName());
+                VeilImGuiUtil.component(action.getName());
             }
 
             ImGui.popStyleVar();

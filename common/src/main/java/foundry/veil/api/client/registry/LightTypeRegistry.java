@@ -2,14 +2,12 @@ package foundry.veil.api.client.registry;
 
 import foundry.veil.Veil;
 import foundry.veil.api.client.render.light.data.AreaLightData;
-import foundry.veil.api.client.render.light.data.SpotLightData;
 import foundry.veil.api.client.render.light.data.DirectionalLightData;
 import foundry.veil.api.client.render.light.data.LightData;
 import foundry.veil.api.client.render.light.data.PointLightData;
 import foundry.veil.api.client.render.light.renderer.LightTypeRenderer;
 import foundry.veil.impl.client.editor.LightInspector;
 import foundry.veil.impl.client.render.light.AreaLightRenderer;
-import foundry.veil.impl.client.render.light.SpotLightRenderer;
 import foundry.veil.impl.client.render.light.DirectionalLightRenderer;
 import foundry.veil.impl.client.render.light.InstancedPointLightRenderer;
 import foundry.veil.platform.registry.RegistrationProvider;
@@ -44,10 +42,6 @@ public final class LightTypeRegistry {
         return new InstancedPointLightRenderer();
     }, (level, camera) -> new PointLightData().setTo(camera).setRadius(15.0F));
     public static final Supplier<LightType<AreaLightData>> AREA = register("area", AreaLightRenderer::new, (level, camera) -> new AreaLightData().setDistance(15.0F).setTo(camera));
-    /**
-     * @since 4.4.0
-     */
-    public static final Supplier<LightType<SpotLightData>> SPOT = register("spot", SpotLightRenderer::new, (level, camera) -> new SpotLightData().setDistance(15.0F).setTo(camera));
 
     private LightTypeRegistry() {
     }

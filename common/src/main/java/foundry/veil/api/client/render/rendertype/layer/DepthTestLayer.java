@@ -2,9 +2,7 @@ package foundry.veil.api.client.render.rendertype.layer;
 
 import com.mojang.serialization.MapCodec;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
-import foundry.veil.api.client.render.rendertype.VeilRenderType;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
-import net.minecraft.client.renderer.RenderStateShard;
 
 public record DepthTestLayer(LayerTemplateValue<DepthState> mode) implements RenderTypeLayer {
 
@@ -14,7 +12,7 @@ public record DepthTestLayer(LayerTemplateValue<DepthState> mode) implements Ren
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        builder.depthTestState(this.mode.parse(params).shard);
+        builder.depthTestState(this.mode.parse(params).nativeState);
     }
 
     @Override
@@ -23,23 +21,17 @@ public record DepthTestLayer(LayerTemplateValue<DepthState> mode) implements Ren
     }
 
     public enum DepthState {
-        NEVER(VeilRenderType.NEVER_DEPTH_TEST),
-        LESS(VeilRenderType.LESS_DEPTH_TEST),
-        EQUAL(VeilRenderType.equalDepthTestShard()),
-        LEQUAL(VeilRenderType.lequalDepthTestShard()),
-        GREATER(VeilRenderType.greaterDepthTestShard()),
-        NOTEQUAL(VeilRenderType.NOTEQUAL_DEPTH_TEST),
-        GEQUAL(VeilRenderType.GEQUAL_DEPTH_TEST),
-        ALWAYS(VeilRenderType.noDepthTestShard());
+        NEVER(com.mojang.renderpearl.api.pipeline.CompareOp.NEVER_PASS),
+        LESS(com.mojang.renderpearl.api.pipeline.CompareOp.GREATER_THAN),
+        EQUAL(com.mojang.renderpearl.api.pipeline.CompareOp.EQUAL),
+        LEQUAL(com.mojang.renderpearl.api.pipeline.CompareOp.GREATER_THAN_OR_EQUAL),
+        GREATER(com.mojang.renderpearl.api.pipeline.CompareOp.LESS_THAN),
+        NOTEQUAL(com.mojang.renderpearl.api.pipeline.CompareOp.NOT_EQUAL),
+        GEQUAL(com.mojang.renderpearl.api.pipeline.CompareOp.LESS_THAN_OR_EQUAL),
+        ALWAYS(com.mojang.renderpearl.api.pipeline.CompareOp.ALWAYS_PASS);
 
-        private final RenderStateShard.DepthTestStateShard shard;
-
-        DepthState(RenderStateShard.DepthTestStateShard shard) {
-            this.shard = shard;
-        }
-
-        public RenderStateShard.DepthTestStateShard getShard() {
-            return this.shard;
-        }
+        private final com.mojang.renderpearl.api.pipeline.CompareOp nativeState;
+        DepthState(com.mojang.renderpearl.api.pipeline.CompareOp nativeState) { this.nativeState = nativeState; }
+        public com.mojang.renderpearl.api.pipeline.CompareOp getState() { return this.nativeState; }
     }
 }

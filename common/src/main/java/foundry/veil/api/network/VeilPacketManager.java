@@ -13,7 +13,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBundlePacket;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerChunkCache;
+import net.fabricmc.fabric.api.networking.v1.PlayerLookup;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
@@ -42,7 +42,7 @@ public interface VeilPacketManager {
      * Creates a {@link VeilPacketManager}.
      *
      * @param modId   The id of the mod creating the channel
-     * @param version The NeoForge channel version
+     * @param version The protocol version
      * @return The packet manager
      */
     static VeilPacketManager create(String modId, String version) {
@@ -108,7 +108,7 @@ public interface VeilPacketManager {
      * @return A sink to send packets to the specified player
      */
     static PacketSink player(ServerPlayer player) {
-        return (PacketSink) player;
+        return player.connection::send;
     }
 
     /**
@@ -118,7 +118,7 @@ public interface VeilPacketManager {
      * @return A sink to send packets to all players in the dimension
      */
     static PacketSink level(ServerLevel level) {
-        return (PacketSink) level;
+        return packet -> level.players().forEach(player -> player.connection.send(packet));
     }
 
     /**
@@ -143,7 +143,7 @@ public interface VeilPacketManager {
      * @return A sink to send packets to all players
      */
     static PacketSink all(MinecraftServer server) {
-        return (PacketSink) server;
+        return packet -> server.getPlayerList().broadcastAll(packet);
     }
 
     /**
@@ -154,11 +154,11 @@ public interface VeilPacketManager {
      * @throws IllegalArgumentException if the entity is not in a server world
      */
     static PacketSink tracking(Entity entity) {
-        if (!(entity.level().getChunkSource() instanceof ServerChunkCache chunkCache)) {
+        if (!(entity.level() instanceof ServerLevel)) {
             throw new IllegalStateException("Cannot send clientbound payloads on the client");
         }
 
-        return packet -> chunkCache.broadcast(entity, packet);
+        return packet -> PlayerLookup.tracking(entity).forEach(player -> player.connection.send(packet));
     }
 
     /**
@@ -169,11 +169,16 @@ public interface VeilPacketManager {
      * @throws IllegalArgumentException if the entity is not in a server world
      */
     static PacketSink trackingAndSelf(Entity entity) {
-        if (!(entity.level().getChunkSource() instanceof ServerChunkCache chunkCache)) {
+        if (!(entity.level() instanceof ServerLevel)) {
             throw new IllegalStateException("Cannot send clientbound payloads on the client");
         }
 
-        return packet -> chunkCache.broadcastAndSend(entity, packet);
+        return packet -> {
+            PlayerLookup.tracking(entity).forEach(player -> player.connection.send(packet));
+            if (entity instanceof ServerPlayer player) {
+                player.connection.send(packet);
+            }
+        };
     }
 
     /**
@@ -185,7 +190,7 @@ public interface VeilPacketManager {
      */
     static PacketSink tracking(ServerLevel level, ChunkPos pos) {
         return packet -> {
-            for (ServerPlayer player : level.getChunkSource().chunkMap.getPlayers(pos, false)) {
+            for (ServerPlayer player : PlayerLookup.tracking(level, pos)) {
                 player.connection.send(packet);
             }
         };
@@ -199,7 +204,7 @@ public interface VeilPacketManager {
      * @return A sink to send packets to all players tracking that chunk
      */
     static PacketSink tracking(ServerLevel level, BlockPos pos) {
-        return tracking(level, new ChunkPos(pos));
+        return tracking(level, ChunkPos.containing(pos));
     }
 
     /**
@@ -211,8 +216,8 @@ public interface VeilPacketManager {
      * @return A sink to send packets to all players tracking that chunk
      */
     static PacketSink tracking(ServerLevel level, BlockPos min, BlockPos max) {
-        return packet -> ChunkPos.rangeClosed(new ChunkPos(min), new ChunkPos(max))
-                .flatMap(pos -> level.getChunkSource().chunkMap.getPlayers(pos, false).stream())
+        return packet -> ChunkPos.rangeClosed(ChunkPos.containing(min), ChunkPos.containing(max))
+                .flatMap(pos -> PlayerLookup.tracking(level, pos).stream())
                 .distinct()
                 .forEach(player -> player.connection.send(packet));
     }
@@ -296,7 +301,7 @@ public interface VeilPacketManager {
          * Creates a {@link VeilPacketManager}.
          *
          * @param modId   The id of the mod to register the channel under
-         * @param version The NeoForge channel version
+         * @param version The protocol version
          * @return The packet manager
          */
         VeilPacketManager create(String modId, String version);

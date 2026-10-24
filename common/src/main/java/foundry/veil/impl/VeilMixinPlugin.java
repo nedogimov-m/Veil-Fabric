@@ -45,6 +45,9 @@ public abstract class VeilMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (mixinClassName.startsWith("foundry.veil." + PACKAGE_NAME + ".mixin.client.perspective.iris.")) {
+            return this.isModLoaded("iris");
+        }
         for (String compat : COMPAT) {
             if (mixinClassName.startsWith(compat)) {
                 return Veil.SODIUM ? !mixinClassName.startsWith(compat + ".vanilla") : !mixinClassName.startsWith(compat + ".sodium");

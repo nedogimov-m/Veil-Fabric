@@ -15,7 +15,7 @@
 //import foundry.veil.api.client.render.vertex.VertexArray;
 //import foundry.veil.api.client.render.vertex.VertexArrayBuilder;
 //import net.minecraft.client.Minecraft;
-//import net.minecraft.resources.ResourceLocation;
+//import net.minecraft.resources.Identifier;
 //import net.minecraft.util.profiling.ProfilerFiller;
 //import org.joml.Vector3dc;
 //import org.joml.Vector4fc;
@@ -40,7 +40,7 @@
 // */
 //public abstract class IndirectLightRenderer<T extends LightData & IndirectLightData> implements LightTypeRenderer<T> {
 //
-//    private static final ResourceLocation CULL_SHADER = Veil.veilPath("light/indirect_sphere");
+//    private static final Identifier CULL_SHADER = Veil.veilPath("light/indirect_sphere");
 //    private static final int MIN_LIGHTS = 20;
 //
 //    protected final int lightSize;

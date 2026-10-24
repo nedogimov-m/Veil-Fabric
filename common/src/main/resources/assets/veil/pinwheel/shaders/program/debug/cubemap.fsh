@@ -1,10 +1,13 @@
+#version 330
+#extension GL_ARB_separate_shader_objects : require
+
 #include veil:common
 
 uniform samplerCube DiffuseSampler0;
 
-in vec2 texCoord;
+layout(location = 0) in vec2 texCoord;
 
-out vec4 outColor;
+layout(location = 0) out vec4 outColor;
 
 void main() {
     float phi = texCoord.s * TWO_PI;

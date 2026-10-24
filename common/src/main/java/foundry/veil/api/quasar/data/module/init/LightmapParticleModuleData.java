@@ -11,24 +11,24 @@ import foundry.veil.api.quasar.data.module.ParticleModuleData;
 import foundry.veil.api.quasar.emitters.module.InitParticleModule;
 import foundry.veil.api.quasar.particle.ParticleModuleSet;
 import imgui.ImGui;
-import net.minecraft.client.renderer.LightTexture;
+import net.minecraft.util.LightCoordsUtil;
 
 public final class LightmapParticleModuleData implements ParticleModuleData, EditorAttributeProvider {
 
     public static final MapCodec<LightmapParticleModuleData> CODEC = Codec.mapEither(
             Codec.BOOL.optionalFieldOf("fullbright", false)
-                    .xmap(bright -> bright ? LightTexture.FULL_BRIGHT : -1, packedLight -> packedLight == LightTexture.FULL_BRIGHT),
+                    .xmap(bright -> bright ? LightCoordsUtil.FULL_BRIGHT : -1, packedLight -> packedLight == LightCoordsUtil.FULL_BRIGHT),
             RecordCodecBuilder.<Integer>mapCodec(instance -> instance.group(
                     Codec.intRange(0, 15)
                             .fieldOf("block")
-                            .forGetter(LightTexture::block),
+                            .forGetter(LightCoordsUtil::block),
                     Codec.intRange(0, 15)
                             .fieldOf("sky")
-                            .forGetter(LightTexture::sky)
-            ).apply(instance, LightTexture::pack))
+                            .forGetter(LightCoordsUtil::sky)
+            ).apply(instance, LightCoordsUtil::pack))
     ).xmap(either -> either.map(LightmapParticleModuleData::new, LightmapParticleModuleData::new), module -> {
         int packedLight = module.packedLight();
-        if (packedLight == -1 || packedLight == LightTexture.FULL_BRIGHT) {
+        if (packedLight == -1 || packedLight == LightCoordsUtil.FULL_BRIGHT) {
             return Either.left(packedLight);
         }
         return Either.right(packedLight);
@@ -53,14 +53,14 @@ public final class LightmapParticleModuleData implements ParticleModuleData, Edi
 
     @Override
     public void renderImGuiAttributes() {
-        int[] editBlockLight = new int[]{LightTexture.block(packedLight)};
-        int[] editSkyLight = new int[]{LightTexture.sky(packedLight)};
+        int[] editBlockLight = new int[]{LightCoordsUtil.block(packedLight)};
+        int[] editSkyLight = new int[]{LightCoordsUtil.sky(packedLight)};
 
         boolean blockLightDirty = ImGui.dragScalar("block", editBlockLight, 0.01f, 0, 15);
         boolean skyLightDirty = ImGui.dragScalar("sky", editSkyLight, 0.01f, 0, 15);
 
         if (blockLightDirty || skyLightDirty) {
-            packedLight = LightTexture.pack(editBlockLight[0], editSkyLight[0]);
+            packedLight = LightCoordsUtil.pack(editBlockLight[0], editSkyLight[0]);
         }
     }
 

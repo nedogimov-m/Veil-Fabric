@@ -111,7 +111,6 @@ dependencies {
 - [Post-Processing](PostProcessing)
 - [Quasar (Particles)](Quasar)
 - [Render Type Stages](RenderTypeStage)
-- [Screenshake](Screenshake)
 - [Custom Shaders](Shader)
 - [Shader Injections](ShaderInject)
 - [Better Vertex Buffers](VertexArray)

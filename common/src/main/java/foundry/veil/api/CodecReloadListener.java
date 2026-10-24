@@ -7,11 +7,12 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.DynamicOps;
 import com.mojang.serialization.JsonOps;
-import foundry.veil.Veil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.resources.FileToIdConverter;
 import net.minecraft.resources.RegistryOps;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
@@ -32,7 +33,9 @@ import java.util.Map;
  * @see Codec
  * @since 1.0.0
  */
-public abstract class CodecReloadListener<T> extends SimplePreparableReloadListener<Map<ResourceLocation, T>> {
+public abstract class CodecReloadListener<T> extends SimplePreparableReloadListener<Map<Identifier, T>> {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("Veil");
 
     protected final Codec<T> codec;
     protected final FileToIdConverter converter;
@@ -61,14 +64,14 @@ public abstract class CodecReloadListener<T> extends SimplePreparableReloadListe
     }
 
     @Override
-    protected @NotNull Map<ResourceLocation, T> prepare(@NotNull ResourceManager resourceManager, @NotNull ProfilerFiller profilerFiller) {
-        Map<ResourceLocation, T> data = new HashMap<>();
+    protected @NotNull Map<Identifier, T> prepare(@NotNull ResourceManager resourceManager, @NotNull ProfilerFiller profilerFiller) {
+        Map<Identifier, T> data = new HashMap<>();
 
         DynamicOps<JsonElement> ops = this.registries != null ? RegistryOps.create(JsonOps.INSTANCE, this.registries) : JsonOps.INSTANCE;
-        Map<ResourceLocation, Resource> resources = this.converter.listMatchingResources(resourceManager);
-        for (Map.Entry<ResourceLocation, Resource> entry : resources.entrySet()) {
-            ResourceLocation location = entry.getKey();
-            ResourceLocation id = this.converter.fileToId(location);
+        Map<Identifier, Resource> resources = this.converter.listMatchingResources(resourceManager);
+        for (Map.Entry<Identifier, Resource> entry : resources.entrySet()) {
+            Identifier location = entry.getKey();
+            Identifier id = this.converter.fileToId(location);
 
             try (Reader reader = entry.getValue().openAsReader()) {
                 JsonElement element = JsonParser.parseReader(reader);
@@ -81,7 +84,7 @@ public abstract class CodecReloadListener<T> extends SimplePreparableReloadListe
                     throw new IllegalStateException("Duplicate data file ignored with ID " + id);
                 }
             } catch (Exception e) {
-                Veil.LOGGER.error("Couldn't parse data file {} from {}", id, location, e);
+                LOGGER.error("Couldn't parse data file {} from {}", id, location, e);
             }
         }
 

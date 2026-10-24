@@ -41,7 +41,7 @@ public interface VeilAddShaderPreProcessorsEvent {
          * @param processor The processor to add
          */
         default void addPreprocessorFirst(ShaderPreProcessor processor) {
-            this.addPreprocessor(processor, true);
+            this.addPreprocessorFirst(processor, true);
         }
 
         /**

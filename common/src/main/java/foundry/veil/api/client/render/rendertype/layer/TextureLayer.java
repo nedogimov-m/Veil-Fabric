@@ -5,10 +5,9 @@ import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
-import net.minecraft.client.renderer.RenderStateShard;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
-public record TextureLayer(LayerTemplateValue<ResourceLocation> texture,
+public record TextureLayer(LayerTemplateValue<Identifier> texture,
                            boolean blur,
                            boolean mipmap) implements RenderTypeLayer {
 
@@ -20,8 +19,7 @@ public record TextureLayer(LayerTemplateValue<ResourceLocation> texture,
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        ResourceLocation location = this.texture.parse(params);
-        builder.textureState(new RenderStateShard.TextureStateShard(location, this.blur, this.blur));
+        builder.textureState(java.util.List.of(new VeilRenderTypeBuilder.Texture(this.texture.parse(params), this.blur, this.mipmap)));
     }
 
     @Override

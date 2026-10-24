@@ -1,136 +1,83 @@
 package foundry.veil.impl.client.render.shader.block;
 
-import com.mojang.blaze3d.platform.GlStateManager;
-import com.mojang.blaze3d.systems.RenderSystem;
-import foundry.veil.api.client.render.VeilRenderSystem;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.api.device.GpuDevice;
 import foundry.veil.api.client.render.shader.block.ShaderBlock;
-import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
-
+import org.lwjgl.system.MemoryUtil;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Objects;
+import java.util.function.BiConsumer;
 
-import static org.lwjgl.opengl.ARBDirectStateAccess.*;
-import static org.lwjgl.opengl.GL15C.*;
-
-/**
- * Abstract implementation of {@link ShaderBlock}.
- *
- * @param <T> The type of object to serialize
- * @author Ocelot
- */
-@ApiStatus.Internal
+/** Owns native uniform storage and CPU staging memory; all GPU uploads are explicit. */
 public abstract class ShaderBlockImpl<T> implements ShaderBlock<T> {
-
-    private static StorageType storageType;
-
+    protected final GpuDevice device;
     protected final BufferBinding binding;
-    protected int buffer;
-    protected T value;
-    protected boolean dirty;
+    @Nullable protected GpuBuffer buffer;
+    @Nullable protected T value;
+    protected boolean dirty = true;
+    private ByteBuffer staging;
+    private boolean closed;
 
-    private int index;
-
-    protected ShaderBlockImpl(BufferBinding binding) {
-        this.binding = binding;
-        this.buffer = 0;
-        this.value = null;
+    protected ShaderBlockImpl(GpuDevice device, BufferBinding binding) {
+        this.device = Objects.requireNonNull(device); this.binding = Objects.requireNonNull(binding);
+        if (binding != BufferBinding.UNIFORM) throw new UnsupportedOperationException("RenderPearl exposes UBOs and typed texel buffers; writable shader storage requires a native algorithm migration");
+    }
+    protected static int allocationSize(int size) {
+        if (size <= 0) throw new IllegalArgumentException("Shader block size must be positive");
+        return Math.multiplyExact(Math.floorDiv(Math.addExact(size, 15), 16), 16);
+    }
+    @Override public void set(@Nullable T value) { this.ensureOpen(); this.value = value; this.dirty = true; }
+    @Override public @Nullable T getValue() { this.ensureOpen(); return this.value; }
+    @Override public BufferBinding getBinding() { return this.binding; }
+    protected final void upload(CommandEncoder encoder, int requestedSize, BiConsumer<T, ByteBuffer> serializer) {
+        this.ensureOpen();
+        int size = allocationSize(requestedSize);
+        if (!this.dirty && this.buffer != null && this.buffer.size() == size) return;
+        this.serialize(requestedSize, serializer);
+        GpuBuffer replacement = this.buffer;
+        boolean allocated = replacement == null || replacement.size() != size;
+        if (allocated) replacement = this.device.createBuffer(() -> "Veil serialized uniform block", GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_COPY_SRC, size);
+        try { encoder.writeToBuffer(replacement.slice(), this.staging.duplicate().clear()); }
+        catch (RuntimeException | Error failure) { if (allocated) replacement.close(); throw failure; }
+        if (allocated) {
+            GpuBuffer previous = this.buffer; this.buffer = replacement;
+            if (previous != null) previous.close();
+        }
         this.dirty = false;
-        this.index = -1;
     }
-
-    protected static StorageType getStorageType() {
-        if (storageType == null) {
-            storageType = VeilRenderSystem.directStateAccessSupported() ? StorageType.DSA : StorageType.LEGACY;
+    protected final Snapshot snapshot(int requestedSize, BiConsumer<T, ByteBuffer> serializer) {
+        this.ensureOpen();
+        this.serialize(requestedSize, serializer);
+        return Snapshot.serialized(this.device, this.staging.duplicate().clear());
+    }
+    private void serialize(int requestedSize, BiConsumer<T, ByteBuffer> serializer) {
+        int size = allocationSize(requestedSize);
+        if (this.staging == null || this.staging.capacity() != size) {
+            ByteBuffer replacement = MemoryUtil.memAlloc(size).order(ByteOrder.nativeOrder());
+            if (this.staging != null) MemoryUtil.memFree(this.staging);
+            this.staging = replacement;
         }
-        return storageType;
+        this.staging.clear(); MemoryUtil.memSet(this.staging, 0);
+        if (this.value != null) serializer.accept(this.value, this.staging.limit(requestedSize));
+        this.staging.clear();
     }
-
-    @Override
-    public void set(@Nullable T value) {
-        this.value = value;
-        this.dirty = true;
+    @Override public GpuBufferSlice slice() {
+        this.ensureOpen();
+        if (this.dirty || this.buffer == null) throw new IllegalStateException("Prepare shader block before opening its render pass");
+        if (this.buffer.isClosed()) throw new IllegalStateException("Shader block storage was closed externally");
+        return this.buffer.slice();
     }
-
-    /**
-     * Binds this block to the specified index.
-     *
-     * @param index The index to bind this block to
-     */
-    public abstract void bind(int index);
-
-    /**
-     * Unbinds this block from the specified index.
-     *
-     * @param index The index to unbind this block from
-     */
-    public abstract void unbind(int index);
-
-    public BufferBinding getBinding() {
-        return this.binding;
-    }
-
-    public int getIndex() {
-        return this.index;
-    }
-
-    @Override
-    public @Nullable T getValue() {
-        return this.value;
-    }
-
-    public void setIndex(int index) {
-        this.index = index;
-    }
-
-    @Override
-    public void free() {
-        VeilRenderSystem.unbind(this);
-        if (this.buffer != 0) {
-            GlStateManager._glDeleteBuffers(this.buffer);
-            this.buffer = 0;
-        }
-    }
-
-    public enum StorageType {
-        LEGACY {
-            @Override
-            public int createBuffer(int binding) {
-                return glGenBuffers();
-            }
-
-            @Override
-            public void resize(int binding, int buffer, long size) {
-                RenderSystem.glBindBuffer(binding, buffer);
-                glBufferData(binding, size, GL_DYNAMIC_DRAW);
-            }
-
-            @Override
-            public void write(int binding, int buffer, ByteBuffer upload) {
-                RenderSystem.glBindBuffer(binding, buffer);
-                glBufferSubData(binding, 0L, upload);
-            }
-        },
-        DSA {
-            @Override
-            public int createBuffer(int binding) {
-                return glCreateBuffers();
-            }
-
-            @Override
-            public void resize(int binding, int buffer, long size) {
-                glNamedBufferData(buffer, size, GL_DYNAMIC_DRAW);
-            }
-
-            @Override
-            public void write(int binding, int buffer, ByteBuffer upload) {
-                glNamedBufferSubData(buffer, 0L, upload);
-            }
-        };
-
-        public abstract int createBuffer(int binding);
-
-        public abstract void resize(int binding, int buffer, long size);
-
-        public abstract void write(int binding, int buffer, ByteBuffer upload);
+    protected final void ensureOpen() { if (this.closed) throw new IllegalStateException("Shader block is closed"); }
+    @Override public void free() {
+        if (this.closed) return;
+        this.closed = true;
+        if (this.buffer != null) this.buffer.close();
+        this.buffer = null;
+        if (this.staging != null) MemoryUtil.memFree(this.staging);
+        this.staging = null; this.value = null;
     }
 }

@@ -4,7 +4,7 @@ import foundry.veil.api.client.render.CullFrustum;
 import org.jetbrains.annotations.ApiStatus;
 
 @ApiStatus.Internal
-public interface LevelRendererExtension extends LevelRendererBlockLayerExtension {
+public interface LevelRendererExtension {
 
     void veil$markChunksDirty();
 

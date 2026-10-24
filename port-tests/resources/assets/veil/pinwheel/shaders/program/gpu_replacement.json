@@ -1,0 +1,8 @@
+{
+  "vertex":"veil:gpu_replacement",
+  "fragment":"veil:gpu_replacement",
+  "uniform_blocks":["ReplacementTint"],
+  "textures":{"ReplacementInput":"veil_test:borrowed"},
+  "definitions":[{"gain":"0.5"}],
+  "blend":{"dstrgb":"one"}
+}

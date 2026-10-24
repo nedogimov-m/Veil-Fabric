@@ -22,11 +22,9 @@ import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.Objects;
 
-import static org.lwjgl.opengl.GL11C.*;
-import static org.lwjgl.opengl.GL12C.*;
-import static org.lwjgl.opengl.GL15C.*;
-import static org.lwjgl.opengl.GL21C.GL_PIXEL_UNPACK_BUFFER;
-import static org.lwjgl.opengl.GL30C.GL_R8;
+import foundry.veil.api.client.render.gpu.NativeVoxelGridTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import com.mojang.renderpearl.api.textures.GpuSampler;
 
 @ApiStatus.Internal
 public final class VoxelShadowGrid {
@@ -42,8 +40,7 @@ public final class VoxelShadowGrid {
     private static final int MAX_DIRTY_BACKLOG = 16384;
 
     private static final Vector3f uniformGridPos = new Vector3f();
-    private static int textureId;
-    private static int pboId;
+    private static NativeVoxelGridTexture texture;
 
     private static ResourceKey<Level> gridDimension;
     private static int originX, originY, originZ;
@@ -78,10 +75,10 @@ public final class VoxelShadowGrid {
             clearLevel();
         }
 
-        Vec3 cameraPos = client.gameRenderer.getMainCamera().getPosition();
-        int cx = (int) Math.floor(cameraPos.x);
-        int cy = (int) Math.floor(cameraPos.y);
-        int cz = (int) Math.floor(cameraPos.z);
+        Vector3fc cameraPos = VeilRenderSystem.renderer().getCameraMatrices().getCameraPosition();
+        int cx = (int) Math.floor(cameraPos.x());
+        int cy = (int) Math.floor(cameraPos.y());
+        int cz = (int) Math.floor(cameraPos.z());
 
         if (hasOccludedLights()) {
             if (rebuildRequested) {
@@ -133,7 +130,7 @@ public final class VoxelShadowGrid {
     }
 
     public static void clearLevel() {
-        RenderSystem.assertOnRenderThreadOrInit();
+        RenderSystem.assertOnRenderThread();
 
         gridDimension = null;
         if (gridBuffer != null) {
@@ -149,19 +146,16 @@ public final class VoxelShadowGrid {
         }
 
         clearDirty();
+        if (texture != null) {
+            ByteBuffer zeros = MemoryUtil.memCalloc(GRID_VOLUME);
+            try { uploadBuffer(zeros); } finally { MemoryUtil.memFree(zeros); }
+        }
     }
 
     public static void close() {
-        RenderSystem.assertOnRenderThreadOrInit();
+        RenderSystem.assertOnRenderThread();
         clearLevel();
-        if (pboId != 0) {
-            glDeleteBuffers(pboId);
-            pboId = 0;
-        }
-        if (textureId != 0) {
-            glDeleteTextures(textureId);
-            textureId = 0;
-        }
+        if (texture != null) { texture.close(); texture = null; }
     }
 
     private static void clearDirty() {
@@ -424,50 +418,25 @@ public final class VoxelShadowGrid {
     private static byte voxelOccupancy(ClientLevel level, BlockPos pos, BlockState state) {
         if (!state.canOcclude()) return 0;
         if (!state.getFluidState().isEmpty()) return 0;
-        return state.isSolidRender(level, pos) ? (byte) 0xFF : 0;
+        return state.isSolidRender() ? (byte) 0xFF : 0;
     }
 
     private static void uploadBuffer(ByteBuffer buffer) {
-        if (buffer == null || pboId == 0) {
-            return;
-        }
-
-        buffer.position(0);
-        buffer.limit(GRID_VOLUME);
-
-        int unpackAlignment = glGetInteger(GL_UNPACK_ALIGNMENT);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pboId);
-        glBufferData(GL_PIXEL_UNPACK_BUFFER, buffer, GL_STREAM_DRAW);
-
-        glBindTexture(GL_TEXTURE_3D, textureId);
-        glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, GRID_SIZE, GRID_SIZE, GRID_SIZE, GL_RED, GL_UNSIGNED_BYTE, 0L);
-        glBindTexture(GL_TEXTURE_3D, 0);
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, unpackAlignment);
+        if (buffer == null || texture == null) return;
+        var encoder = RenderSystem.getDevice().createCommandEncoder();
+        texture.upload(encoder, buffer.duplicate().position(0).limit(GRID_VOLUME));
+        encoder.submit();
     }
 
     private static void ensureTexture() {
-        if (textureId != 0) {
-            return;
-        }
-        textureId = glGenTextures();
-        glBindTexture(GL_TEXTURE_3D, textureId);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        if (texture != null) return;
+        var created = new NativeVoxelGridTexture(RenderSystem.getDevice());
         ByteBuffer zeros = MemoryUtil.memCalloc(GRID_VOLUME);
-        glTexImage3D(GL_TEXTURE_3D, 0, GL_R8, GRID_SIZE, GRID_SIZE, GRID_SIZE, 0, GL_RED, GL_UNSIGNED_BYTE, zeros);
-        MemoryUtil.memFree(zeros);
-        glBindTexture(GL_TEXTURE_3D, 0);
-
-        pboId = glGenBuffers();
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pboId);
-        glBufferData(GL_PIXEL_UNPACK_BUFFER, GRID_VOLUME, GL_STREAM_DRAW);
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        try {
+            var encoder = RenderSystem.getDevice().createCommandEncoder(); created.upload(encoder, zeros); encoder.submit();
+            texture = created;
+        } catch (RuntimeException | Error failure) { created.close(); throw failure; }
+        finally { MemoryUtil.memFree(zeros); }
     }
 
     private static boolean hasOccludedLights() {
@@ -484,7 +453,6 @@ public final class VoxelShadowGrid {
         return uniformGridPos;
     }
 
-    public static int getTextureId() {
-        return textureId;
-    }
+    public static GpuTextureView getTextureView() { return Objects.requireNonNull(texture, "Voxel texture is not prepared").view(); }
+    public static GpuSampler getSampler() { return Objects.requireNonNull(texture, "Voxel texture is not prepared").sampler(); }
 }

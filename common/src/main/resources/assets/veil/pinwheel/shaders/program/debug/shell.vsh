@@ -1,15 +1,13 @@
+#version 330
+#extension GL_ARB_separate_shader_objects : require
+#include <minecraft:dynamictransforms.glsl>
+#include <minecraft:projection.glsl>
 
 layout(location = 0) in vec3 Position;
-layout(location = 4) in vec3 Normal;
-
-uniform mat4 ModelViewMat;
-uniform mat4 ProjMat;
-
-out vec3 vertexNormal;
+layout(location = 5) in vec3 Normal;
+layout(location = 0) out vec3 vertexNormal;
 
 void main() {
-    vec4 pos = ModelViewMat * vec4(Position, 1.0);
-    gl_Position = ProjMat * pos;
-
+    gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);
     vertexNormal = Normal;
 }

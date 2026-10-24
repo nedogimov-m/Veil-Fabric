@@ -1,5 +1,13 @@
 #veil:buffer veil:camera VeilCamera
 
+float veilScreenDepthToClip(float depth) {
+#ifdef RENDERPEARL_DEPTH_IS_ZERO_TO_ONE
+    return depth;
+#else
+    return depth * 2.0 - 1.0;
+#endif
+}
+
 float getFov() {
     return 2.0 * atan(1.0 / VeilCamera.ProjMat[1][1]);
 }
@@ -100,50 +108,45 @@ vec3 clipToScreenSpace(vec4 pos) {
 // Screen Space
 
 vec4 screenToWorldSpace(vec3 pos) {
-    vec4 viewSpacePos = VeilCamera.IProjMat * (vec4(pos.xy, pos.z, 1.0) * 2.0 - 1.0);
+    vec4 viewSpacePos = VeilCamera.IProjMat * vec4(pos.xy * 2.0 - 1.0, veilScreenDepthToClip(pos.z), 1.0);
     return vec4(VeilCamera.CameraPosition, 0.0) + VeilCamera.IViewMat * (viewSpacePos / viewSpacePos.w);
 }
 
 vec4 screenToLocalSpace(vec3 pos) {
-    vec4 viewSpacePos = VeilCamera.IProjMat * (vec4(pos.xy, pos.z, 1.0) * 2.0 - 1.0);
+    vec4 viewSpacePos = VeilCamera.IProjMat * vec4(pos.xy * 2.0 - 1.0, veilScreenDepthToClip(pos.z), 1.0);
     return VeilCamera.IViewMat * (viewSpacePos / viewSpacePos.w);
 }
 
 vec4 screenToViewSpace(vec3 pos) {
-    vec4 viewSpacePos = VeilCamera.IProjMat * (vec4(pos.xy, pos.z, 1.0) * 2.0 - 1.0);
+    vec4 viewSpacePos = VeilCamera.IProjMat * vec4(pos.xy * 2.0 - 1.0, veilScreenDepthToClip(pos.z), 1.0);
     return viewSpacePos / viewSpacePos.w;
 }
 
 vec4 screenToClipSpace(vec3 pos) {
-    return vec4(pos.xy, pos.z, 1.0) * 2.0 - 1.0;
+    return vec4(pos.xy * 2.0 - 1.0, veilScreenDepthToClip(pos.z), 1.0);
 }
 
 vec4 screenToWorldSpace(vec2 uv, float depth) {
-    vec4 viewSpacePos = VeilCamera.IProjMat * (vec4(uv, depth, 1.0) * 2.0 - 1.0);
+    vec4 viewSpacePos = VeilCamera.IProjMat * vec4(uv * 2.0 - 1.0, veilScreenDepthToClip(depth), 1.0);
     return vec4(VeilCamera.CameraPosition, 0.0) + VeilCamera.IViewMat * (viewSpacePos / viewSpacePos.w);
 }
 
 vec4 screenToLocalSpace(vec2 uv, float depth) {
-    vec4 viewSpacePos = VeilCamera.IProjMat * (vec4(uv, depth, 1.0) * 2.0 - 1.0);
+    vec4 viewSpacePos = VeilCamera.IProjMat * vec4(uv * 2.0 - 1.0, veilScreenDepthToClip(depth), 1.0);
     return VeilCamera.IViewMat * (viewSpacePos / viewSpacePos.w);
 }
 
 vec4 screenToViewSpace(vec2 uv, float depth) {
-    vec4 viewSpacePos = VeilCamera.IProjMat * (vec4(uv, depth, 1.0) * 2.0 - 1.0);
+    vec4 viewSpacePos = VeilCamera.IProjMat * vec4(uv * 2.0 - 1.0, veilScreenDepthToClip(depth), 1.0);
     return viewSpacePos / viewSpacePos.w;
 }
 
 vec4 screenToClipSpace(vec2 uv, float depth) {
-    return vec4(uv, depth, 1.0) * 2.0 - 1.0;
+    return vec4(uv * 2.0 - 1.0, veilScreenDepthToClip(depth), 1.0);
 }
 
 // Space Util
 
 vec3 viewDirFromUv(vec2 uv) {
-    return normalize(screenToLocalSpace(uv, 1.0).xyz);
-}
-
-float depthSampleToWorldDepth(float depthSample) {
-    float f = depthSample * 2.0 - 1.0;
-    return 2.0 * VeilCamera.NearPlane * VeilCamera.FarPlane / (VeilCamera.FarPlane + VeilCamera.NearPlane - f * (VeilCamera.FarPlane - VeilCamera.NearPlane));
+    return normalize(screenToLocalSpace(uv, 0.0).xyz);
 }

@@ -1,0 +1,4 @@
+accessWidener v2 official
+# The genuine native RenderType subclasses in VeilRenderType require this constructor.
+# Every legacy entry is preserved and mapped in upstream-retired/access/.
+accessible method net/minecraft/client/renderer/rendertype/RenderType <init> (Ljava/lang/String;Lnet/minecraft/client/renderer/rendertype/RenderSetup;)V

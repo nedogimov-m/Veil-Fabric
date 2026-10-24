@@ -4,7 +4,6 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
-import net.minecraft.client.renderer.RenderStateShard;
 
 import java.util.Optional;
 import java.util.OptionalDouble;
@@ -18,7 +17,7 @@ public record LineLayer(OptionalDouble width) implements RenderTypeLayer {
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        builder.lineState(new RenderStateShard.LineStateShard(this.width));
+        builder.lineState(this.width);
     }
 
     @Override

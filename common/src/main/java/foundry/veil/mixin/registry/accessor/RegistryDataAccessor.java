@@ -1,16 +1,19 @@
 package foundry.veil.mixin.registry.accessor;
 
-import com.mojang.serialization.Lifecycle;
 import net.minecraft.resources.RegistryDataLoader;
-import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.RegistryLoadTask;
+import net.minecraft.resources.RegistryOps;
+import net.minecraft.core.HolderLookup;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Invoker;
 
-import java.util.Map;
+import java.util.List;
 
-@Mixin(RegistryDataLoader.RegistryData.class)
+@Mixin(RegistryDataLoader.class)
 public interface RegistryDataAccessor {
 
-    @Invoker
-    RegistryDataLoader.Loader<?> invokeCreate(Lifecycle lifecycle, Map<ResourceKey<?>, Exception> errors);
+    @Invoker("createContext")
+    static RegistryOps.RegistryInfoLookup veil$createContext(List<HolderLookup.RegistryLookup<?>> lookups, List<RegistryLoadTask<?>> tasks) {
+        throw new AssertionError();
+    }
 }

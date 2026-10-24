@@ -42,6 +42,7 @@ public class CameraMatrices {
 
     public static VeilShaderBufferLayout<CameraMatrices> createLayout() {
         return VeilShaderBufferLayout.<CameraMatrices>builder()
+                .name("VeilCameraMatrices")
                 .mat4("ProjMat", CameraMatrices::getProjectionMatrix)
                 .mat4("IProjMat", CameraMatrices::getInverseProjectionMatrix)
                 .mat4("ViewMat", CameraMatrices::getViewMatrix)
@@ -55,13 +56,10 @@ public class CameraMatrices {
     }
 
     private void extractPlanes() {
-        if ((this.projectionMatrix.properties() & Matrix4fc.PROPERTY_PERSPECTIVE) != 0) {
-            this.nearPlane = this.projectionMatrix.perspectiveNear();
-            this.farPlane = this.projectionMatrix.perspectiveFar();
-        } else {
-            this.nearPlane = this.inverseProjectionMatrix.transformPosition(0, 0, -1, this.cameraPosition).z();
-            this.farPlane = this.inverseProjectionMatrix.transformPosition(0, 0, 1, this.cameraPosition).z();
-        }
+        // Native Projection reverses Z and uses the actual backend's clip range for both perspective and orthographic matrices.
+        this.nearPlane = -this.inverseProjectionMatrix.transformProject(0, 0, 1, new Vector3f()).z();
+        float farDepth = RenderSystem.getDevice().getDeviceInfo().isZZeroToOne() ? 0 : -1;
+        this.farPlane = -this.inverseProjectionMatrix.transformProject(0, 0, farDepth, new Vector3f()).z();
     }
 
     /**
@@ -74,15 +72,20 @@ public class CameraMatrices {
      * @param z          The Z position of the camera
      */
     public void update(Matrix4fc projection, Matrix4fc modelView, double x, double y, double z) {
+        this.update(projection, projection, modelView, x, y, z);
+    }
+
+    /** Capture explicit CPU matrices from the native camera owner, including a separately supplied rendered projection if bobbing moved it. */
+    public void update(Matrix4fc projection, Matrix4fc renderedProjection, Matrix4fc modelView, double x, double y, double z) {
         ShaderBlock<CameraMatrices> block = VeilRenderSystem.getBlock(VeilShaderBufferRegistry.CAMERA.get());
         if (block == null) {
             return;
         }
 
         this.projectionMatrix.set(projection);
-        this.projectionMatrix.invertPerspective(this.inverseProjectionMatrix);
+        this.projectionMatrix.invert(this.inverseProjectionMatrix);
 
-        if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) {
+        if (projection.equals(renderedProjection)) {
             this.cameraBobOffset.set(0);
         } else {
             // Adjust the camera position based on the view bobbing
@@ -90,7 +93,7 @@ public class CameraMatrices {
         }
 
         // This moves the view bobbing from the projection matrix to the view matrix
-        this.viewMatrix.set(modelView).mulLocal(this.inverseProjectionMatrix.mul(RenderSystem.getProjectionMatrix(), new Matrix4f()));
+        this.viewMatrix.set(modelView).mulLocal(this.inverseProjectionMatrix.mul(renderedProjection, new Matrix4f()));
         this.viewMatrix.invert(this.inverseViewMatrix);
         this.inverseViewMatrix.normal(this.inverseViewRotMatrix);
 
@@ -104,14 +107,14 @@ public class CameraMatrices {
     /**
      * Updates the camera matrices to match the current render system projection.
      */
-    public void updateRenderSystem() {
+    public void updateGui(Matrix4fc projection) {
         ShaderBlock<CameraMatrices> block = VeilRenderSystem.getBlock(VeilShaderBufferRegistry.CAMERA.get());
         if (block == null) {
             return;
         }
 
-        this.projectionMatrix.set(RenderSystem.getProjectionMatrix());
-        this.projectionMatrix.invertAffine(this.inverseProjectionMatrix);
+        this.projectionMatrix.set(projection);
+        this.projectionMatrix.invert(this.inverseProjectionMatrix);
 
         this.viewMatrix.identity();
         this.inverseViewMatrix.identity();
@@ -124,6 +127,14 @@ public class CameraMatrices {
         block.set(this);
         VeilRenderSystem.bind(VeilShaderBufferRegistry.CAMERA.get());
     }
+
+    /** Update from the actual extracted native world camera. */
+    public void update(net.minecraft.client.renderer.state.level.CameraRenderState camera) {
+        this.update(camera.projectionMatrix, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z);
+    }
+
+    /** The actual GUI projection must come from its native Projection owner. */
+    public void updateRenderSystem(Matrix4fc projection) { this.updateGui(projection); }
 
     /**
      * Saves the camera values to the specified object.

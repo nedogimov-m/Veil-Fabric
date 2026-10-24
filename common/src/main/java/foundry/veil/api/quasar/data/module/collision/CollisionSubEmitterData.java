@@ -13,14 +13,14 @@ import foundry.veil.api.quasar.particle.ParticleModuleSet;
 import foundry.veil.api.quasar.particle.ParticleSystemManager;
 import imgui.ImGui;
 import imgui.type.ImString;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 public final class CollisionSubEmitterData implements ParticleModuleData, EditorAttributeProvider {
 
-    public static final MapCodec<CollisionSubEmitterData> CODEC = ResourceLocation.CODEC.fieldOf("subemitter").xmap(CollisionSubEmitterData::new, CollisionSubEmitterData::subEmitter);
-    private ResourceLocation subEmitter;
+    public static final MapCodec<CollisionSubEmitterData> CODEC = Identifier.CODEC.fieldOf("subemitter").xmap(CollisionSubEmitterData::new, CollisionSubEmitterData::subEmitter);
+    private Identifier subEmitter;
 
-    public CollisionSubEmitterData(ResourceLocation subEmitter) {
+    public CollisionSubEmitterData(Identifier subEmitter) {
         this.subEmitter = subEmitter;
     }
 
@@ -48,14 +48,14 @@ public final class CollisionSubEmitterData implements ParticleModuleData, Editor
         ImString textInput = new ImString(this.subEmitter.toString());
         if (ImGui.inputTextWithHint("subemitter", "namespace:path", textInput)) {
             try {
-                ResourceLocation location = ResourceLocation.parse(textInput.get());
-                QuasarParticles.registryAccess().registry(QuasarParticles.EMITTER).map(registry -> registry.get(location))
+                Identifier location = Identifier.parse(textInput.get());
+                QuasarParticles.registryAccess().lookup(QuasarParticles.EMITTER).map(registry -> registry.getValue(location))
                         .ifPresent(data -> this.subEmitter = location);
             } catch (Exception ignored) {}
         }
     }
 
-    public ResourceLocation subEmitter() {
+    public Identifier subEmitter() {
         return subEmitter;
     }
 

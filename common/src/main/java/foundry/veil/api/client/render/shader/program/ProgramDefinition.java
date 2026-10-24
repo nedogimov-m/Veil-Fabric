@@ -10,7 +10,7 @@ import foundry.veil.api.client.render.shader.texture.ShaderTextureSource;
 import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMaps;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.GsonHelper;
 import org.jetbrains.annotations.Nullable;
 
@@ -37,23 +37,27 @@ import static org.lwjgl.opengl.GL43C.GL_COMPUTE_SHADER;
  * @param definitions           The definitions to inject when compiling
  * @param definitionDefaults    The default values for definitions
  * @param samplers              The samplers to bind when using this shader
+ * @param uniformBlocks         The named native uniform buffers supplied by the draw owner
  * @param shaders               A map of all sources and their OpenGL types for convenience
  * @param requiredFeatures      The features this shader requires, or it will not be allowed to load
  * @param blendMode             The blend mode to use or <code>null</code> to use the current blend mode
  * @author Ocelot
  */
-public record ProgramDefinition(@Nullable ResourceLocation vertex,
-                                @Nullable ResourceLocation tesselationControl,
-                                @Nullable ResourceLocation tesselationEvaluation,
-                                @Nullable ResourceLocation geometry,
-                                @Nullable ResourceLocation fragment,
-                                @Nullable ResourceLocation compute,
+public record ProgramDefinition(@Nullable Identifier vertex,
+                                @Nullable Identifier tesselationControl,
+                                @Nullable Identifier tesselationEvaluation,
+                                @Nullable Identifier geometry,
+                                @Nullable Identifier fragment,
+                                @Nullable Identifier compute,
                                 String[] definitions,
                                 Map<String, String> definitionDefaults,
                                 Map<String, ShaderTextureSource> samplers,
-                                Int2ObjectMap<ResourceLocation> shaders,
+                                Set<String> uniformBlocks,
+                                Int2ObjectMap<Identifier> shaders,
                                 ShaderFeature[] requiredFeatures,
                                 @Nullable ShaderBlendMode blendMode) {
+
+    public ProgramDefinition { uniformBlocks = Collections.unmodifiableSet(new LinkedHashSet<>(uniformBlocks)); }
 
     public Map<String, String> getMacros(Set<String> dependencies, ShaderPreDefinitions definitions) {
         Map<String, String> macros = new HashMap<>(definitions.getStaticDefinitions());
@@ -63,7 +67,10 @@ public record ProgramDefinition(@Nullable ResourceLocation vertex,
             if (definition != null) {
                 macros.put(name.toUpperCase(Locale.ROOT), definition);
             } else {
-                macros.put(name.toUpperCase(Locale.ROOT), this.definitionDefaults.getOrDefault(name, "1"));
+                String definitionDefault = this.definitionDefaults.get(name);
+                if (definitionDefault != null) {
+                    macros.put(name.toUpperCase(Locale.ROOT), definitionDefault);
+                }
             }
 
             dependencies.add(name);
@@ -76,13 +83,13 @@ public record ProgramDefinition(@Nullable ResourceLocation vertex,
      */
     public static class Deserializer implements JsonDeserializer<ProgramDefinition> {
 
-        private static @Nullable ResourceLocation deserializeSource(JsonObject json, String name, JsonDeserializationContext context) {
+        private static @Nullable Identifier deserializeSource(JsonObject json, String name, JsonDeserializationContext context) {
             JsonElement element = json.get(name);
             if (element == null) {
                 return null;
             }
 
-            return context.deserialize(element, ResourceLocation.class);
+            return context.deserialize(element, Identifier.class);
         }
 
         private String[] deserializeDefinitions(JsonArray json, Map<String, String> defaults) throws JsonParseException {
@@ -127,12 +134,12 @@ public record ProgramDefinition(@Nullable ResourceLocation vertex,
         @Override
         public ProgramDefinition deserialize(JsonElement element, Type type, JsonDeserializationContext context) throws JsonParseException {
             JsonObject json = element.getAsJsonObject();
-            ResourceLocation vertex = deserializeSource(json, "vertex", context);
-            ResourceLocation tesselationControl = deserializeSource(json, "tesselation_control", context);
-            ResourceLocation tesselationEvaluation = deserializeSource(json, "tesselation_evaluation", context);
-            ResourceLocation geometry = deserializeSource(json, "geometry", context);
-            ResourceLocation fragment = deserializeSource(json, "fragment", context);
-            ResourceLocation compute = deserializeSource(json, "compute", context);
+            Identifier vertex = deserializeSource(json, "vertex", context);
+            Identifier tesselationControl = deserializeSource(json, "tesselation_control", context);
+            Identifier tesselationEvaluation = deserializeSource(json, "tesselation_evaluation", context);
+            Identifier geometry = deserializeSource(json, "geometry", context);
+            Identifier fragment = deserializeSource(json, "fragment", context);
+            Identifier compute = deserializeSource(json, "compute", context);
 
             String[] definitions;
             Map<String, String> definitionDefaults;
@@ -146,6 +153,15 @@ public record ProgramDefinition(@Nullable ResourceLocation vertex,
             }
 
             Map<String, ShaderTextureSource> textures = json.has("textures") ? this.deserializeTextures(json.getAsJsonObject("textures")) : Collections.emptyMap();
+            Set<String> uniformBlocks = new LinkedHashSet<>();
+            if (json.has("uniform_blocks")) {
+                for (JsonElement block : GsonHelper.getAsJsonArray(json, "uniform_blocks")) {
+                    String name = GsonHelper.convertToString(block, "uniform_blocks entry");
+                    if (!name.matches("[A-Za-z_][A-Za-z0-9_]*") || !uniformBlocks.add(name))
+                        throw new JsonSyntaxException("Invalid or duplicate native uniform block: " + name);
+                    if (textures.containsKey(name)) throw new JsonSyntaxException("Uniform block conflicts with a texture binding: " + name);
+                }
+            }
             ShaderBlendMode blendMode;
             if (json.has("blend")) {
                 DataResult<ShaderBlendMode> result = ShaderBlendMode.CODEC.parse(JsonOps.INSTANCE, json.get("blend"));
@@ -181,7 +197,7 @@ public record ProgramDefinition(@Nullable ResourceLocation vertex,
                 requiredFeatures = new HashSet<>();
             }
 
-            Int2ObjectMap<ResourceLocation> sources = new Int2ObjectArrayMap<>();
+            Int2ObjectMap<Identifier> sources = new Int2ObjectArrayMap<>();
             if (vertex != null) {
                 sources.put(GL_VERTEX_SHADER, vertex);
             }
@@ -213,6 +229,7 @@ public record ProgramDefinition(@Nullable ResourceLocation vertex,
                     definitions,
                     definitionDefaults,
                     textures,
+                    uniformBlocks,
                     Int2ObjectMaps.unmodifiable(sources),
                     requiredFeatures.toArray(ShaderFeature[]::new),
                     blendMode);

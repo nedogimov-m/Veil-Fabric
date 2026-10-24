@@ -1,65 +1,91 @@
-#include veil:light
-#include veil:fog
+#version 330
+#extension GL_ARB_separate_shader_objects : require
+
+#if defined(PER_FACE_LIGHTING) || !defined(NO_CARDINAL_LIGHTING)
+#include <minecraft:light.glsl>
+#endif
+#include <minecraft:fog.glsl>
+#include <minecraft:dynamictransforms.glsl>
+#include <minecraft:projection.glsl>
+#include <minecraft:sample_lightmap.glsl>
 
 layout(location = 0) in vec3 Position;
-layout(location = 1) in vec2 UV0;
-layout(location = 2) in vec3 Normal;
-layout(location = 3) in uint BoneIndex;
-layout(location = 4) in uint PackedOverlay;
-layout(location = 5) in uint PackedLight;
-layout(location = 6) in vec4 ModelColor;
+layout(location = 1) in vec4 Color;
+layout(location = 2) in vec2 UV0;
+layout(location = 3) in ivec2 UV1;
+layout(location = 4) in ivec2 UV2;
+layout(location = 5) in vec3 Normal;
 
-struct BoneData {
-    mat4 Transform;
-    mat3 Normal;
-};
-
-layout(std140) uniform NecromancerBones {
-    BoneData Bones[NECROMANCER_BONE_BUFFER_SIZE];
-};
-
+#if !defined(NO_OVERLAY) && !defined(OIT_ALPHA_ONLY)
 uniform sampler2D Sampler1;
+#endif
+
+#if !defined(EMISSIVE) && !defined(OIT_ALPHA_ONLY)
 uniform sampler2D Sampler2;
+#endif
 
-uniform mat4 ModelViewMat;
-uniform mat4 ProjMat;
-uniform mat3 NormalMat;
-uniform int FogShape;
+layout(location = 0) out float sphericalVertexDistance;
+layout(location = 1) out float cylindricalVertexDistance;
 
-uniform uint NecromancerBoneCount;
+#ifdef PER_FACE_LIGHTING
+layout(location = 2) out vec4 vertexPerFaceColorBack;
+layout(location = 3) out vec4 vertexPerFaceColorFront;
+#else
+layout(location = 2) out vec4 vertexColor;
+#endif
 
-uniform vec3 Light0_Direction;
-uniform vec3 Light1_Direction;
+#ifndef EMISSIVE
+layout(location = 4) out vec4 lightMapColor;
+#endif
 
-out float vertexDistance;
-out vec4 vertexColor;
-out vec4 lightMapColor;
-out vec4 overlayColor;
-out vec2 texCoord0;
-out vec3 normal;
+#ifndef NO_OVERLAY
+layout(location = 5) out vec4 overlayColor;
+#endif
+
+layout(location = 6) out vec2 texCoord0;
+#ifdef GLINT
+layout(location = 7) out vec2 texCoordGlint;
+#endif
+
+layout(location = 9) out vec4 veilSkinnedColor;
 
 void main() {
-    BoneData data = Bones[BoneIndex + NecromancerBoneCount * uint(gl_InstanceID)];
-    mat4 transform = mat4(data.Transform);
-    transform[3] = vec4(0.0, 0.0, 0.0, 1.0);// Last column is color, so set it to identity
-    gl_Position = ProjMat * ModelViewMat * transpose(transform) * vec4(Position, 1.0);
-
-    vertexDistance = fog_distance(ModelViewMat, Position, FogShape);
-
-    vec3 transformedNormal = normalize((vec4(Normal, 0.0) * transform).xyz);
-    vertexColor = ModelColor * data.Transform[3] * minecraft_mix_light(Light0_Direction, Light1_Direction, transformedNormal);
-
+    veilSkinnedColor = Color;
+    // #veil:normal
+    vec3 skinnedNormal = normalize(mat3(ModelViewMat) * Normal);
     // #veil:light_uv
-    ivec2 UV2 = ivec2(PackedLight & 15u, (PackedLight >> 4u) & 15u);
-    ivec2 UV1 = ivec2(PackedOverlay & 15u, (PackedOverlay >> 4u) & 15u);
+    vec2 skinnedLightUv = clamp(vec2(UV2) / 256.0 + vec2(0.5 / 16.0), vec2(0.5 / 16.0), vec2(15.5 / 16.0));
+    gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);
 
+    sphericalVertexDistance = fog_spherical_distance(Position);
+    cylindricalVertexDistance = fog_cylindrical_distance(Position);
+
+#ifdef PER_FACE_LIGHTING
+    vec2 light = minecraft_compute_light(Light0_Direction, Light1_Direction, Normal);
+    vertexPerFaceColorBack = minecraft_mix_light_separate(-light, Color);
+    vertexPerFaceColorFront = minecraft_mix_light_separate(light, Color);
+#elif defined(NO_CARDINAL_LIGHTING)
+    vertexColor = Color;
+#else
+    vertexColor = minecraft_mix_light(Light0_Direction, Light1_Direction, Normal, Color);
+#endif
+
+#if !defined(EMISSIVE) && !defined(OIT_ALPHA_ONLY)
     // #veil:light_color
-    lightMapColor = texelFetch(Sampler2, UV2, 0);
+    lightMapColor = sample_lightmap(Sampler2, UV2);
+#endif
 
+#if !defined(NO_OVERLAY) && !defined(OIT_ALPHA_ONLY)
     overlayColor = texelFetch(Sampler1, UV1, 0);
+#endif
 
     texCoord0 = UV0;
 
-    // #veil:normal
-    normal = NormalMat * transformedNormal;
+#ifdef APPLY_TEXTURE_MATRIX
+    texCoord0 = (TextureMat * vec4(UV0, 0.0, 1.0)).xy;
+#endif
+
+#ifdef GLINT
+    texCoordGlint = (TextureMat * vec4(UV0, 0.0, 1.0)).xy;
+#endif
 }

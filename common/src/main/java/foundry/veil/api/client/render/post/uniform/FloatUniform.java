@@ -3,7 +3,7 @@ package foundry.veil.api.client.render.post.uniform;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import foundry.veil.api.client.render.shader.uniform.ShaderUniform;
+import foundry.veil.api.client.render.gpu.GpuUniformBuffer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,8 +30,8 @@ public record FloatUniform(float[] values) implements UniformValue {
     ).apply(instance, FloatUniform::new));
 
     @Override
-    public void apply(ShaderUniform uniform) {
-        uniform.setVector(this.values);
+    public void apply(GpuUniformBuffer uniform, String name) {
+        uniform.setVector(name, this.values);
     }
 
     @Override

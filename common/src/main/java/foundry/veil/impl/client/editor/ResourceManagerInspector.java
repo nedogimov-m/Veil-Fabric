@@ -94,16 +94,17 @@ public class ResourceManagerInspector extends SingleWindowInspector {
 
                     ImGui.pushStyleColor(ImGuiCol.Text, color);
                     ImGui.sameLine();
-                    int icon = pack.getTexture();
+                    var icon = pack.getTexture();
 
-                    if (icon != 0) {
+                    if (icon != null) {
                         float size = ImGui.getTextLineHeight();
 
                         ImVec2 cursorScreenPos = ImGui.getCursorScreenPos();
                         float minX = cursorScreenPos.x;
                         float minY = cursorScreenPos.y + ITEM_VERTICAL_PADDING + 1.0f;
 
-                        ImGui.getWindowDrawList().addImage(icon, minX, minY, minX + size, minY + size);
+                        ImGui.setCursorScreenPos(minX, minY);
+                        ImGuiMC.image(ImGuiMC.getTexture(icon), ImGuiMC.getSampler(pack.getSampler()), size, size);
 
                         ImGui.setCursorScreenPos(minX + size + ITEM_VERTICAL_PADDING + 1.0f, cursorScreenPos.y);
                     } else {

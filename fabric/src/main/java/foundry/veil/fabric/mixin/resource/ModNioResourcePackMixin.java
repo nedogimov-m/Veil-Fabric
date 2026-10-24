@@ -2,12 +2,12 @@ package foundry.veil.fabric.mixin.resource;
 
 import foundry.veil.Veil;
 import foundry.veil.ext.PackResourcesExtension;
-import net.fabricmc.fabric.api.resource.ModResourcePack;
-import net.fabricmc.fabric.impl.resource.loader.ModNioResourcePack;
+import net.fabricmc.fabric.api.resource.v1.pack.ModPackResources;
+import net.fabricmc.fabric.impl.resource.pack.ModNioPackResources;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.api.ModContainer;
 import net.fabricmc.loader.api.metadata.ModMetadata;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
@@ -25,8 +25,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
-@Mixin(value = ModNioResourcePack.class, remap = false)
-public abstract class ModNioResourcePackMixin implements ModResourcePack, PackResourcesExtension {
+@Mixin(value = ModNioPackResources.class, remap = false)
+public abstract class ModNioResourcePackMixin implements ModPackResources, PackResourcesExtension {
 
     @Shadow
     @Final
@@ -59,7 +59,7 @@ public abstract class ModNioResourcePackMixin implements ModResourcePack, PackRe
                             @Override
                             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                                 String filename = nsPath.relativize(file).toString().replace(separator, "/");
-                                ResourceLocation name = ResourceLocation.tryBuild(namespace, filename);
+                                Identifier name = Identifier.tryBuild(namespace, filename);
 
                                 if (name != null) {
                                     consumer.accept(type, name, nsPath, file, PackResourcesExtension.findDevPath(basePath, file));

@@ -3,7 +3,6 @@ package foundry.veil.api.client.render.rendertype.layer;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
-import foundry.veil.api.client.render.VeilRenderBridge;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
 
 public record PatchesLayer(int patchVertices) implements RenderTypeLayer {
@@ -14,7 +13,7 @@ public record PatchesLayer(int patchVertices) implements RenderTypeLayer {
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        builder.addLayer(VeilRenderBridge.patchState(this.patchVertices));
+        builder.patchState(this.patchVertices);
     }
 
     @Override

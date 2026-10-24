@@ -11,7 +11,7 @@ import imgui.type.ImBoolean;
 import imgui.type.ImFloat;
 import imgui.type.ImInt;
 import imgui.type.ImString;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Vector4f;
@@ -26,7 +26,7 @@ public class TrailSettings implements EditorAttributeProvider {
             Codec.INT.optionalFieldOf("trailLength", 20).forGetter(settings -> settings.trailLength),
             CodecUtil.VECTOR4FC_CODEC.optionalFieldOf("trailColor", new Vector4f(1.0F)).forGetter(settings -> settings.trailColor),
             Codec.FLOAT.fieldOf("trailWidthModifier").forGetter(settings -> settings.trailWidthModifierFloat),
-            ResourceLocation.CODEC.optionalFieldOf("trailTexture").forGetter(settings -> Optional.ofNullable(settings.trailTexture)),
+            Identifier.CODEC.optionalFieldOf("trailTexture").forGetter(settings -> Optional.ofNullable(settings.trailTexture)),
             Codec.FLOAT.fieldOf("trailPointModifier").forGetter(settings -> 1.0F),
             Trail.TilingMode.CODEC.optionalFieldOf("tilingMode", Trail.TilingMode.STRETCH).forGetter(settings -> settings.tilingMode),
             Codec.BOOL.optionalFieldOf("billboard", true).forGetter(settings -> settings.billboard),
@@ -39,7 +39,7 @@ public class TrailSettings implements EditorAttributeProvider {
     private Vector4f trailColor;
     private TrailWidthModifier trailWidthModifier;
     private TrailPointModifier trailPointModifier;
-    private ResourceLocation trailTexture;
+    private Identifier trailTexture;
     private Trail.TilingMode tilingMode;
     private boolean billboard;
     private boolean additive;
@@ -50,14 +50,14 @@ public class TrailSettings implements EditorAttributeProvider {
      * @deprecated Use {@link TrailSettings#TrailSettings(int, int, Vector4fc, float, Optional, float, Trail.TilingMode, boolean, boolean, boolean)} instead
      */
     @Deprecated
-    public TrailSettings(int trailFrequency, int trailLength, Vector4fc trailColor, TrailWidthModifier trailWidthModifier, @Nullable ResourceLocation trailTexture, TrailPointModifier trailPointModifier, Trail.TilingMode tilingMode, boolean billboard, boolean parentRotation) {
+    public TrailSettings(int trailFrequency, int trailLength, Vector4fc trailColor, TrailWidthModifier trailWidthModifier, @Nullable Identifier trailTexture, TrailPointModifier trailPointModifier, Trail.TilingMode tilingMode, boolean billboard, boolean parentRotation) {
         this(trailFrequency, trailLength, trailColor, trailWidthModifier, trailTexture, trailPointModifier, tilingMode, billboard, false, parentRotation);
     }
 
     /**
      * @since 4.3.0
      */
-    public TrailSettings(int trailFrequency, int trailLength, Vector4fc trailColor, TrailWidthModifier trailWidthModifier, @Nullable ResourceLocation trailTexture, TrailPointModifier trailPointModifier, Trail.TilingMode tilingMode, boolean billboard, boolean additive, boolean parentRotation) {
+    public TrailSettings(int trailFrequency, int trailLength, Vector4fc trailColor, TrailWidthModifier trailWidthModifier, @Nullable Identifier trailTexture, TrailPointModifier trailPointModifier, Trail.TilingMode tilingMode, boolean billboard, boolean additive, boolean parentRotation) {
         this.trailFrequency = trailFrequency;
         this.trailLength = trailLength;
         this.trailColor = new Vector4f(trailColor);
@@ -70,7 +70,7 @@ public class TrailSettings implements EditorAttributeProvider {
         this.parentRotation = parentRotation;
     }
 
-    private TrailSettings(int trailFrequency, int trailLength, Vector4fc trailColor, float trailWidthModifier, Optional<ResourceLocation> trailTexture, float trailPointModifier, Trail.TilingMode tilingMode, boolean billboard, boolean additive, boolean parentRotation) {
+    private TrailSettings(int trailFrequency, int trailLength, Vector4fc trailColor, float trailWidthModifier, Optional<Identifier> trailTexture, float trailPointModifier, Trail.TilingMode tilingMode, boolean billboard, boolean additive, boolean parentRotation) {
         this.trailFrequency = trailFrequency;
         this.trailLength = trailLength;
         this.trailColor = new Vector4f(trailColor);
@@ -143,7 +143,7 @@ public class TrailSettings implements EditorAttributeProvider {
         this.trailWidthModifier = trailWidthModifier;
     }
 
-    public void setTrailTexture(@Nullable ResourceLocation trailTexture) {
+    public void setTrailTexture(@Nullable Identifier trailTexture) {
         this.trailTexture = trailTexture;
     }
 
@@ -163,7 +163,7 @@ public class TrailSettings implements EditorAttributeProvider {
         return this.trailWidthModifier;
     }
 
-    public @Nullable ResourceLocation getTrailTexture() {
+    public @Nullable Identifier getTrailTexture() {
         return this.trailTexture;
     }
 
@@ -176,7 +176,7 @@ public class TrailSettings implements EditorAttributeProvider {
             }
 
             try {
-                this.trailTexture = ResourceLocation.parse(trailTextureString.get());
+                this.trailTexture = Identifier.parse(trailTextureString.get());
             } catch (Exception ignored) {
 
             }

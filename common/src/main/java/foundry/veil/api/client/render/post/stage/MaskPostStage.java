@@ -1,6 +1,5 @@
 package foundry.veil.api.client.render.post.stage;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
@@ -33,8 +32,8 @@ public record MaskPostStage(boolean red,
 
     @Override
     public void apply(PostPipeline.Context context) {
-        RenderSystem.colorMask(this.red, this.green, this.blue, this.alpha);
-        RenderSystem.depthMask(this.depth);
+        context.setColorMask(this.red, this.green, this.blue, this.alpha);
+        context.setDepthState(context.depthComparison(), this.depth);
     }
 
     @Override

@@ -12,7 +12,7 @@ import static foundry.veil.api.quasar.emitters.shape.Sphere.parametricSphere;
 public class Hemisphere implements EmitterShape {
 
     @Override
-    public Vector3d getPoint(RandomSource randomSource, Vector3fc dimensions, Vector3fc shapeRotation, Vector3dc position, boolean fromSurface) {
+    public Vector3d getPoint(RandomSource randomSource, Vector3fc dimensions, Vector3fc rotation, Vector3dc position, boolean fromSurface) {
         double theta = randomSource.nextDouble() * 2 * Math.PI;
         double phi = randomSource.nextDouble() * Math.PI / 2;
         double x = Math.cos(theta) * Math.sin(phi);
@@ -30,7 +30,7 @@ public class Hemisphere implements EmitterShape {
             );
         }
         Vector3d pos = normal.mul(dim).mul(0.5);
-        pos = pos.rotate(new Quaterniond().rotationXYZ((float) Math.toRadians(shapeRotation.x()), (float) Math.toRadians(shapeRotation.y()), (float) Math.toRadians(shapeRotation.z())));
+        pos = pos.rotate(new Quaterniond().rotationXYZ((float) Math.toRadians(rotation.x()), (float) Math.toRadians(rotation.y()), (float) Math.toRadians(rotation.z())));
         return pos.add(position);
     }
 
@@ -38,7 +38,7 @@ public class Hemisphere implements EmitterShape {
     public void renderShape(PoseStack stack, VertexConsumer consumer, Vector3fc dimensions, Vector3fc rotation) {
         stack.pushPose();
 
-        stack.mulPose(new Quaternionf().rotateX((float) Math.toRadians(rotation.x())).rotateY((float) Math.toRadians(rotation.y())).rotateZ((float) Math.toRadians(rotation.z())));
+        stack.rotate(new Quaternionf().rotateX((float) Math.toRadians(rotation.x())).rotateY((float) Math.toRadians(rotation.y())).rotateZ((float) Math.toRadians(rotation.z())));
         stack.scale(dimensions.x(), dimensions.y(), dimensions.z());
 
         float radius = 0.5f;
@@ -48,8 +48,8 @@ public class Hemisphere implements EmitterShape {
                 Vector3f v1 = parametricSphere((float) Math.toRadians(i * 11.25f), (float) Math.toRadians(j * 11.25f), radius);
                 if (v1.z < -0.01) continue;
                 Vector3f v2 = parametricSphere((float) Math.toRadians((i + 1) * 11.25f), (float) Math.toRadians(j * 11.25f), radius);
-                consumer.addVertex(matrix4f, v1.x(), v1.y(), v1.z()).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0);
-                consumer.addVertex(matrix4f, v2.x(), v2.y(), v2.z()).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0);
+                consumer.addVertex(matrix4f, v1.x(), v1.y(), v1.z()).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0).setLineWidth(1);
+                consumer.addVertex(matrix4f, v2.x(), v2.y(), v2.z()).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0).setLineWidth(1);
             }
         }
 

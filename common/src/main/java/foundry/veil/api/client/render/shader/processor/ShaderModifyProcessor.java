@@ -5,7 +5,7 @@ import foundry.veil.impl.client.render.shader.injection.ShaderInjectionManager;
 import io.github.ocelot.glslprocessor.api.GlslSyntaxException;
 import io.github.ocelot.glslprocessor.api.node.GlslTree;
 import io.github.ocelot.glslprocessor.lib.anarres.cpp.LexerException;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.io.IOException;
@@ -23,7 +23,7 @@ import java.util.Set;
 public class ShaderModifyProcessor implements ShaderPreProcessor {
 
     private final ShaderInjectionManager shaderInjectionManager;
-    private final Set<ResourceLocation> appliedModifications;
+    private final Set<Identifier> appliedModifications;
 
     public ShaderModifyProcessor() {
         this.shaderInjectionManager = VeilRenderSystem.renderer().getShaderInjectionManager();
@@ -37,12 +37,12 @@ public class ShaderModifyProcessor implements ShaderPreProcessor {
 
     @Override
     public void modify(Context ctx, GlslTree tree) throws IOException, GlslSyntaxException, LexerException {
-        ResourceLocation name = ctx.name();
+        Identifier name = ctx.name();
         if (name == null || !this.appliedModifications.add(name)) {
             return;
         }
         boolean applyVersion = ctx.isSourceFile();
-        for (ResourceLocation include : ctx.shaderImporter().addedImports()) {
+        for (Identifier include : ctx.shaderImporter().addedImports()) {
             this.shaderInjectionManager.applyModifiers(include, tree, applyVersion);
         }
         this.shaderInjectionManager.applyModifiers(name, tree, applyVersion);

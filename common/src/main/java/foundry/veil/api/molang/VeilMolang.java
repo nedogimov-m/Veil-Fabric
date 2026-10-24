@@ -1,6 +1,5 @@
 package foundry.veil.api.molang;
 
-import gg.moonflower.molangcompiler.api.GlobalMolangCompiler;
 import gg.moonflower.molangcompiler.api.MolangCompiler;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -11,7 +10,7 @@ import org.jetbrains.annotations.ApiStatus;
  */
 public final class VeilMolang {
 
-    private static MolangCompiler compiler = input -> GlobalMolangCompiler.get().compile(input);
+    private static MolangCompiler compiler = MolangCompiler.create(MolangCompiler.DEFAULT_FLAGS, VeilMolang.class.getClassLoader());
 
     /**
      * @return The current molang compiler instance

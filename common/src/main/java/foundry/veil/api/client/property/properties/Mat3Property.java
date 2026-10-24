@@ -1,12 +1,12 @@
 package foundry.veil.api.client.property.properties;
 
-import com.mojang.blaze3d.shaders.Uniform;
 import foundry.veil.api.client.property.InvertibleProperty;
 import foundry.veil.api.client.registry.PropertyRegistry;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
+import foundry.veil.api.client.render.gpu.GpuUniformBuffer;
 import foundry.veil.api.flare.modifier.PropertyModifier;
 import gg.moonflower.molangcompiler.api.MolangExpression;
 import gg.moonflower.molangcompiler.api.MolangRuntime;
-import net.minecraft.client.renderer.ShaderInstance;
 import org.jetbrains.annotations.Contract;
 import org.joml.Matrix3f;
 import org.joml.Matrix3fc;
@@ -21,10 +21,10 @@ public class Mat3Property extends InvertibleProperty<Matrix3f> {
     }
 
     @Override
-    public void applyValue(String name, ShaderInstance shader) {
-        Uniform uniform = shader.getUniform(name);
+    public void applyValue(String name, GpuShaderProgram shader, String block) {
+        GpuUniformBuffer uniform = uniform(name, shader, block, GpuUniformBuffer.ValueType.MAT3);
         if (uniform != null) {
-            uniform.set(this.overrideValue);
+            uniform.setMatrix(name, this.overrideValue);
         }
     }
 

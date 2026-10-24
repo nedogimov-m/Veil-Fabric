@@ -1,8 +1,11 @@
+#version 330
+#extension GL_ARB_separate_shader_objects : require
+
 uniform sampler2D DiffuseDepthSampler;
 
-in vec2 texCoord;
+layout(location = 0) in vec2 texCoord;
 
-out vec4 OutColor;
+layout(location = 0) out vec4 OutColor;
 
 void main() {
     gl_FragDepth = texture(DiffuseDepthSampler, texCoord).r;

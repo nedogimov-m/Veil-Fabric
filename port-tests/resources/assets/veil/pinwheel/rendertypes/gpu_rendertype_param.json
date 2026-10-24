@@ -1,0 +1,1 @@
+{"format":"POSITION","mode":"TRIANGLES","bufferSize":"SMALL","standardUniforms":false,"layers":[{"type":"veil:shader","name":"veil:gpu_rendertype_red"},{"type":"minecraft:texture","texture":"%1$s"}]}

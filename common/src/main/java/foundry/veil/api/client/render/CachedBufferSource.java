@@ -1,94 +1,27 @@
 package foundry.veil.api.client.render;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.ByteBufferBuilder;
-import com.mojang.blaze3d.vertex.MeshData;
+import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
-import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
-import org.jetbrains.annotations.NotNull;
+import foundry.veil.api.client.render.gpu.NativeVertexSnapshot;
+import foundry.veil.api.client.render.VertexSource;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import org.lwjgl.system.NativeResource;
+import java.util.*;
 
-import javax.annotation.Nullable;
-
-public class CachedBufferSource implements MultiBufferSource, NativeResource {
-
-    private final Object2ObjectMap<RenderType, ByteBufferBuilder> buffers = new Object2ObjectArrayMap<>();
-    private final Object2ObjectMap<RenderType, BufferBuilder> startedBuilders = new Object2ObjectArrayMap<>();
-
-    @Nullable
-    private RenderType lastSharedType;
-
-    private void clearBuffers() {
-        this.buffers.values().forEach(ByteBufferBuilder::close);
-        this.buffers.clear();
+/** CPU capture submitted during actual native feature collection, with independent connected strips. */
+public final class CachedBufferSource implements VertexSource, NativeResource {
+    private final Map<RenderType,NativeVertexSnapshot.Capture> started=new LinkedHashMap<>();
+    private final List<Batch> ready=new ArrayList<>();
+    @Override public VertexConsumer getBuffer(RenderType type){
+        if(!type.canConsolidateConsecutiveGeometry())this.finish(type);
+        return this.started.computeIfAbsent(type,key->new NativeVertexSnapshot.Capture(key.format()));
     }
-
-    @Override
-    public @NotNull VertexConsumer getBuffer(@NotNull RenderType renderType) {
-        BufferBuilder last = this.startedBuilders.get(renderType);
-        if (last != null && !renderType.canConsolidateConsecutiveGeometry()) {
-            this.endBatch(renderType, last);
-            last = null;
-        }
-
-        if (last != null) {
-            return last;
-        }
-
-        ByteBufferBuilder bytebufferbuilder = this.buffers.computeIfAbsent(renderType, unused -> new ByteBufferBuilder(renderType.bufferSize()));
-        BufferBuilder builder = new BufferBuilder(bytebufferbuilder, renderType.mode(), renderType.format());
-        this.startedBuilders.put(renderType, builder);
-        return builder;
+    private void finish(RenderType type){var capture=this.started.remove(type);if(capture!=null){var snapshot=capture.finish();if(!snapshot.vertices().isEmpty())this.ready.add(new Batch(type,snapshot));}}
+    public void submit(SubmitNodeCollector collector,PoseStack poses){
+        for(var type:List.copyOf(this.started.keySet()))this.finish(type);
+        try{for(var batch:this.ready)collector.submitCustomGeometry(poses,batch.type,batch.snapshot);}finally{this.ready.clear();}
     }
-
-    @Override
-    public void free() {
-        this.clearBuffers();
-        this.startedBuilders.clear();
-        this.lastSharedType = null;
-    }
-
-    public void endLastBatch() {
-        if (this.lastSharedType != null) {
-            this.endBatch(this.lastSharedType);
-            this.lastSharedType = null;
-        }
-    }
-
-    public void endBatch() {
-        this.endLastBatch();
-
-        for (RenderType rendertype : this.buffers.keySet()) {
-            this.endBatch(rendertype);
-        }
-
-        this.clearBuffers();
-    }
-
-    public void endBatch(RenderType renderType) {
-        BufferBuilder bufferbuilder = this.startedBuilders.remove(renderType);
-        if (bufferbuilder != null) {
-            this.endBatch(renderType, bufferbuilder);
-        }
-    }
-
-    private void endBatch(RenderType renderType, BufferBuilder builder) {
-        MeshData meshdata = builder.build();
-        if (meshdata != null) {
-            if (renderType.sortOnUpload()) {
-                ByteBufferBuilder bytebufferbuilder = this.buffers.computeIfAbsent(renderType, unused -> new ByteBufferBuilder(renderType.bufferSize()));
-                meshdata.sortQuads(bytebufferbuilder, RenderSystem.getVertexSorting());
-            }
-
-            renderType.draw(meshdata);
-        }
-
-        if (renderType.equals(this.lastSharedType)) {
-            this.lastSharedType = null;
-        }
-    }
+    @Override public void free(){this.started.clear();this.ready.clear();}
+    private record Batch(RenderType type,NativeVertexSnapshot snapshot){}
 }

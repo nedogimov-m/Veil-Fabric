@@ -1,6 +1,6 @@
 package foundry.veil.api.network.handler;
 
-import net.minecraft.network.PacketSendListener;
+import io.netty.channel.ChannelFutureListener;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -51,7 +51,7 @@ public interface PacketContext {
      * @param payload  the payload to create a packet from
      * @param callback an optional callback to execute after the packet is sent, may be <code>null</code>.
      */
-    default void sendPacket(CustomPacketPayload payload, @Nullable PacketSendListener callback) {
+    default void sendPacket(CustomPacketPayload payload, @Nullable ChannelFutureListener callback) {
         this.sendPacket(this.createPacket(payload), callback);
     }
 
@@ -70,7 +70,7 @@ public interface PacketContext {
      * @param packet   the payload
      * @param callback an optional callback to execute after the packet is sent, may be {@code null}.
      */
-    void sendPacket(Packet<?> packet, @Nullable PacketSendListener callback);
+    void sendPacket(Packet<?> packet, @Nullable ChannelFutureListener callback);
 
     /**
      * Disconnects the player.

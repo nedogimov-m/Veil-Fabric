@@ -9,21 +9,29 @@ import foundry.veil.api.client.render.framebuffer.FramebufferManager;
 import foundry.veil.api.client.render.light.renderer.LightRenderer;
 import foundry.veil.api.client.render.post.PostPipeline;
 import foundry.veil.api.client.render.post.PostProcessingManager;
+import foundry.veil.api.client.render.rendertype.VeilRenderType;
 import foundry.veil.api.client.render.shader.ShaderManager;
 import foundry.veil.api.client.render.shader.ShaderModificationManager;
 import foundry.veil.api.client.render.shader.ShaderPreDefinitions;
+import foundry.veil.api.client.render.shader.NativeShaderDefaults;
 import foundry.veil.api.flare.FlareEffectManager;
 import foundry.veil.api.quasar.particle.ParticleSystemManager;
-import foundry.veil.api.screenshake.ScreenShakeManager;
 import foundry.veil.impl.client.render.dynamicbuffer.DynamicBufferManager;
 import foundry.veil.impl.client.render.dynamicbuffer.VanillaShaderCompiler;
+import foundry.veil.impl.client.render.dynamicbuffer.NativeDynamicBuffers;
 import foundry.veil.impl.client.render.pipeline.VeilBloomRenderer;
 import foundry.veil.impl.client.render.pipeline.VeilFirstPersonRenderer;
 import foundry.veil.impl.client.render.rendertype.DynamicRenderTypeManager;
 import foundry.veil.impl.client.render.shader.injection.ShaderInjectionManager;
+import foundry.veil.impl.client.render.shader.injection.NativeShaderInjectionService;
+import foundry.veil.impl.client.render.shader.injection.NativeShaderInjectionFrames;
+import foundry.veil.impl.client.render.shader.injection.NativeShaderViews;
+import foundry.veil.api.client.render.shader.processor.ShaderInjectProcessor;
+import foundry.veil.api.client.render.shader.texture.ShaderTextureSource;
+import foundry.veil.api.client.render.texture.TextureFilter;
 import foundry.veil.mixin.pipeline.accessor.PipelineReloadableResourceManagerAccessor;
 import net.minecraft.ChatFormatting;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.PreparableReloadListener;
 import net.minecraft.server.packs.resources.ReloadableResourceManager;
 import net.minecraft.server.packs.resources.ResourceManager;
@@ -34,6 +42,7 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -43,13 +52,13 @@ import java.util.stream.Collectors;
  */
 public class VeilRenderer implements ResourceManagerReloadListener {
 
-    public static final ResourceLocation ALBEDO_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/albedo");
-    public static final ResourceLocation NORMAL_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/normal");
-    public static final ResourceLocation LIGHT_UV_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/light_uv");
-    public static final ResourceLocation LIGHT_COLOR_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/light_color");
-    public static final ResourceLocation DEBUG_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/debug");
+    public static final Identifier ALBEDO_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/albedo");
+    public static final Identifier NORMAL_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/normal");
+    public static final Identifier LIGHT_UV_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/light_uv");
+    public static final Identifier LIGHT_COLOR_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/light_color");
+    public static final Identifier DEBUG_BUFFER_TEXTURE = Veil.veilPath("dynamic_buffer/debug");
 
-    public static final ResourceLocation COMPOSITE = Veil.veilPath("core/composite");
+    public static final Identifier COMPOSITE = Veil.veilPath("core/composite");
 
     private final VanillaShaderCompiler vanillaShaderCompiler;
     private final DynamicBufferManager dynamicBufferManager;
@@ -57,6 +66,14 @@ public class VeilRenderer implements ResourceManagerReloadListener {
     private final ShaderInjectionManager shaderInjectionManager;
     private final ShaderPreDefinitions shaderPreDefinitions;
     private final ShaderManager shaderManager;
+    private final NativeShaderInjectionService nativeShaderInjections;
+    private final NativeShaderInjectionFrames nativeShaderFrames;
+    private final NativeShaderViews.Handler nativeShaderViews;
+    private final Supplier<NativeShaderDefaults.Values> nativeShaderDefaults = () -> NativeShaderDefaults.Values.capture(
+            System.currentTimeMillis(), direction -> {
+                var level = net.minecraft.client.Minecraft.getInstance().level;
+                return level == null ? 1.0 : level.cardinalLighting().byFace(direction);
+            });
     private final FramebufferManager framebufferManager;
     private final PostProcessingManager postProcessingManager;
     private final DynamicRenderTypeManager dynamicRenderTypeManager;
@@ -65,27 +82,67 @@ public class VeilRenderer implements ResourceManagerReloadListener {
     private final EditorManager editorManager;
     private final CameraMatrices cameraMatrices;
     private final LightRenderer lightRenderer;
-    private final ScreenShakeManager screenShakeManager;
     private final GuiInfo guiInfo;
 
     @ApiStatus.Internal
     public VeilRenderer(ReloadableResourceManager resourceManager, Window window) {
         this.vanillaShaderCompiler = new VanillaShaderCompiler();
-        this.dynamicBufferManager = new DynamicBufferManager(window.getWidth(), window.getHeight());
+        this.dynamicBufferManager = new DynamicBufferManager(RenderSystem.getDevice(), resourceManager, window.getWidth(), window.getHeight(),
+                this.vanillaShaderCompiler, this::dynamicBuffersChanged);
+        NativeDynamicBuffers.bindRuntime(this.dynamicBufferManager);
         this.shaderPreDefinitions = new ShaderPreDefinitions();
+        foundry.veil.api.client.render.shader.NativeShaderBlocks.bindRuntime(() -> {
+            var layouts = new java.util.HashMap<Identifier, VeilShaderBufferLayout<?>>();
+            foundry.veil.api.client.registry.VeilShaderBufferRegistry.REGISTRY.entrySet()
+                    .forEach(entry -> layouts.put(entry.getKey().identifier(), entry.getValue()));
+            return java.util.Map.copyOf(layouts);
+        });
         this.shaderModificationManager = new ShaderModificationManager();
         this.shaderInjectionManager = new ShaderInjectionManager();
-        this.shaderManager = new ShaderManager(ShaderManager.PROGRAM_SET, this.shaderPreDefinitions, this.dynamicBufferManager);
+        this.shaderManager = new ShaderManager(RenderSystem.getDevice(), ShaderManager.PROGRAM_SET, this.shaderPreDefinitions);
+        this.shaderManager.addPreprocessorRegistry((resources, registry) -> registry.addPreprocessor(new ShaderInjectProcessor(this.shaderInjectionManager), false));
+        this.shaderManager.addPreprocessorRegistry((resources, registry) -> foundry.veil.VeilClient.clientPlatform().onRegisterShaderPreProcessors(resources, registry));
+        this.shaderManager.setGlobal(program -> foundry.veil.VeilClient.clientPlatform().onVeilCompileShaders(
+                this.shaderManager, java.util.Map.of(program.definition().getLocation(), program)));
         this.framebufferManager = new FramebufferManager();
-        this.postProcessingManager = new PostProcessingManager();
+        this.nativeShaderInjections = new NativeShaderInjectionService(this.shaderInjectionManager, this.shaderManager::getDefinitions, this.shaderPreDefinitions);
+        foundry.veil.api.client.render.shader.NativePipelineBridge.bindRuntime(this.shaderPreDefinitions, this.nativeShaderInjections,
+                List.of((resources, registry) -> foundry.veil.VeilClient.clientPlatform().onRegisterShaderPreProcessors(resources, registry)));
+        this.nativeShaderFrames = new NativeShaderInjectionFrames(this.nativeShaderInjections, RenderSystem.getDevice(), new ShaderTextureSource.Context() {
+            @Override public foundry.veil.api.client.render.gpu.GpuFramebuffer getFramebuffer(Identifier name) {
+                return VeilRenderer.this.framebufferManager.getFramebuffer(name);
+            }
+            @Override public TextureFilter framebufferFilter(Identifier name, int attachment, boolean depth) {
+                var definition = VeilRenderer.this.framebufferManager.getFramebufferDefinition(name);
+                if (definition == null) return TextureFilter.CLAMP;
+                if (depth) {
+                    if (definition.depthBuffer() == null) throw new IllegalArgumentException("Replacement shader requested a missing framebuffer depth texture: " + name);
+                    return definition.depthBuffer().filter();
+                }
+                if (attachment < 0 || attachment >= definition.colorBuffers().length) throw new IllegalArgumentException("Replacement shader requested a missing framebuffer color attachment: " + name);
+                return definition.colorBuffers()[attachment].filter();
+            }
+        }, VeilRenderSystem::captureShaderBlockSnapshots, foundry.veil.api.client.render.shader.NativeShaderBlocks::layoutNames);
+        NativeShaderDefaults.bindRuntime(this.nativeShaderDefaults);
+        NativeShaderInjectionFrames.bindRuntime(this.nativeShaderFrames);
+        this.postProcessingManager = new PostProcessingManager(RenderSystem.getDevice(), resourceManager, this.shaderManager,
+                this.framebufferManager, net.minecraft.util.Util.backgroundExecutor(), this.dynamicBufferManager::getBufferTexture,
+                this.dynamicBufferManager::getAvailableBuffers,
+                mask -> this.dynamicBufferManager.setActiveBuffers(Identifier.parse("veil:post"), mask));
         this.dynamicRenderTypeManager = new DynamicRenderTypeManager();
+        VeilRenderType.bindRuntime(this.shaderManager, this.framebufferManager, net.minecraft.util.Util.backgroundExecutor());
+        VeilRenderType.setDynamicManager(this.dynamicRenderTypeManager);
         this.quasarParticleManager = new ParticleSystemManager();
         this.flareEffectManager = new FlareEffectManager();
         this.editorManager = new EditorManager(resourceManager);
+        foundry.veil.impl.client.render.profiler.VeilRenderProfilerImpl.bindRuntime(RenderSystem.getDevice(),
+                () -> this.editorManager.isVisible(inspector -> inspector instanceof foundry.veil.impl.client.editor.PipelineStatisticsViewer));
+        foundry.veil.impl.client.editor.ShaderInspector.bindRuntime(this.shaderManager, this.shaderPreDefinitions, resourceManager);
         this.cameraMatrices = new CameraMatrices();
         this.lightRenderer = new LightRenderer();
-        this.screenShakeManager = new ScreenShakeManager();
         this.guiInfo = new GuiInfo();
+        this.nativeShaderViews = this::enterNativeShaderView;
+        NativeShaderViews.bindRuntime(this.nativeShaderViews);
 
         List<PreparableReloadListener> listeners = ((PipelineReloadableResourceManagerAccessor) resourceManager).getListeners();
 
@@ -98,6 +155,11 @@ public class VeilRenderer implements ResourceManagerReloadListener {
         resourceManager.registerReloadListener(this.dynamicRenderTypeManager);
         resourceManager.registerReloadListener(this.flareEffectManager.getShellManager());
         resourceManager.registerReloadListener(this);
+    }
+
+    private void dynamicBuffersChanged(foundry.veil.api.client.render.dynamicbuffer.DynamicBuffersChange change) {
+        this.shaderManager.setActiveBuffers(change.enabledBuffersMask());
+        foundry.veil.VeilClient.clientPlatform().onVeilDynamicBuffersChanged(change);
     }
 
     @ApiStatus.Internal
@@ -120,8 +182,8 @@ public class VeilRenderer implements ResourceManagerReloadListener {
      * @param buffers The buffers to enable
      * @return Whether any change occurred
      */
-    public boolean enableBuffers(ResourceLocation name, DynamicBufferType... buffers) {
-        RenderSystem.assertOnRenderThreadOrInit();
+    public boolean enableBuffers(Identifier name, DynamicBufferType... buffers) {
+        RenderSystem.assertOnRenderThread();
         if (buffers.length == 0) {
             return false;
         }
@@ -136,8 +198,8 @@ public class VeilRenderer implements ResourceManagerReloadListener {
      * @param buffers The buffers to disable
      * @return Whether any change occurred
      */
-    public boolean disableBuffers(ResourceLocation name, DynamicBufferType... buffers) {
-        RenderSystem.assertOnRenderThreadOrInit();
+    public boolean disableBuffers(Identifier name, DynamicBufferType... buffers) {
+        RenderSystem.assertOnRenderThread();
         if (buffers.length == 0) {
             return false;
         }
@@ -152,8 +214,8 @@ public class VeilRenderer implements ResourceManagerReloadListener {
      * @param name The name of the "source" of the buffer change
      * @return Whether any change occurred
      */
-    public boolean disableBuffers(ResourceLocation name) {
-        RenderSystem.assertOnRenderThreadOrInit();
+    public boolean disableBuffers(Identifier name) {
+        RenderSystem.assertOnRenderThread();
         return this.dynamicBufferManager.setActiveBuffers(name, 0);
     }
 
@@ -273,14 +335,6 @@ public class VeilRenderer implements ResourceManagerReloadListener {
     }
 
     /**
-     * @return The manager for screen shaking
-     * @since 4.5.0
-     */
-    public ScreenShakeManager getScreenShakeManager() {
-        return this.screenShakeManager;
-    }
-
-    /**
      * @return The gui info instance
      */
     public GuiInfo getGuiInfo() {
@@ -291,6 +345,7 @@ public class VeilRenderer implements ResourceManagerReloadListener {
 
     @ApiStatus.Internal
     public void resize(int width, int height) {
+        this.framebufferManager.setMainFramebuffer(net.minecraft.client.Minecraft.getInstance().gameRenderer.mainRenderTarget());
         this.framebufferManager.resizeFramebuffers(width, height);
         this.dynamicBufferManager.resizeFramebuffers(width, height);
 
@@ -306,9 +361,50 @@ public class VeilRenderer implements ResourceManagerReloadListener {
         this.postProcessingManager.endFrame();
     }
 
+    private NativeShaderViews.State enterNativeShaderView(NativeShaderViews.View view) {
+        CameraMatrices previousCamera = new CameraMatrices();
+        this.cameraMatrices.backup(previousCamera);
+        GuiInfo.State previousGui = this.guiInfo.snapshot();
+        NativeShaderViews.State restore = () -> {
+            try { this.cameraMatrices.restore(previousCamera); }
+            finally { this.guiInfo.restore(previousGui); }
+        };
+        try {
+            if (view.kind() == NativeShaderViews.Kind.GUI) {
+                this.cameraMatrices.updateGui(view.projection());
+                this.guiInfo.update(view.guiScale());
+            } else {
+                this.cameraMatrices.update(view.projection(), view.view(), view.x(), view.y(), view.z());
+                this.guiInfo.unbind();
+            }
+            return restore;
+        } catch (RuntimeException | Error failure) {
+            try { restore.close(); } catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
+            throw failure;
+        }
+    }
+
     @ApiStatus.Internal
     public void free() {
-        this.dynamicBufferManager.free();
+        VeilLevelPerspectiveRenderer.free();
+        VeilRenderType.unbindRuntime();
+        this.editorManager.close();
+        foundry.veil.impl.client.render.profiler.VeilRenderProfilerImpl.unbindRuntime(RenderSystem.getDevice());
+        foundry.veil.impl.client.editor.ShaderInspector.unbindRuntime();
+        foundry.veil.api.client.render.shader.NativePipelineBridge.flush();
+        NativeShaderViews.unbindRuntime(this.nativeShaderViews);
+        NativeShaderDefaults.unbindRuntime(this.nativeShaderDefaults);
+        this.nativeShaderFrames.close();
+        foundry.veil.api.client.render.shader.NativePipelineBridge.unbindRuntime();
+        this.nativeShaderInjections.close();
+        foundry.veil.api.client.render.shader.NativeShaderBlocks.unbindRuntime();
+        NativeDynamicBuffers.flush(this.dynamicBufferManager);
+        NativeDynamicBuffers.unbindRuntime(this.dynamicBufferManager);
+        this.dynamicBufferManager.close();
+        this.vanillaShaderCompiler.close();
+        var retiredVariants = this.vanillaShaderCompiler.retirement();
+        net.minecraft.client.Minecraft.getInstance().managedBlock(retiredVariants::isDone);
+        retiredVariants.join();
         this.shaderManager.close();
         this.framebufferManager.free();
         this.postProcessingManager.free();
@@ -319,6 +415,7 @@ public class VeilRenderer implements ResourceManagerReloadListener {
 
     @Override
     public void onResourceManagerReload(@NotNull ResourceManager resourceManager) {
+        VeilLevelPerspectiveRenderer.free();
         VeilBloomRenderer.tryEnable();
     }
 }

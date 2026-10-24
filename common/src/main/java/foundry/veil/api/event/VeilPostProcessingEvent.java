@@ -2,7 +2,7 @@ package foundry.veil.api.event;
 
 import foundry.veil.api.client.render.post.PostPipeline;
 import foundry.veil.api.client.render.post.PostProcessingManager;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 /**
  * <p>Events fired when Veil runs post-processing.</p>
@@ -32,7 +32,7 @@ public final class VeilPostProcessingEvent {
          * @param pipeline The pipeline running
          * @param context  The context for running pipelines
          */
-        void preVeilPostProcessing(ResourceLocation name, PostPipeline pipeline, PostPipeline.Context context);
+        void preVeilPostProcessing(Identifier name, PostPipeline pipeline, PostPipeline.Context context);
     }
 
     /**
@@ -50,6 +50,6 @@ public final class VeilPostProcessingEvent {
          * @param pipeline The pipeline running
          * @param context  The context for running pipelines
          */
-        void postVeilPostProcessing(ResourceLocation name, PostPipeline pipeline, PostPipeline.Context context);
+        void postVeilPostProcessing(Identifier name, PostPipeline pipeline, PostPipeline.Context context);
     }
 }

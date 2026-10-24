@@ -2,9 +2,7 @@ package foundry.veil.api.client.render.rendertype.layer;
 
 import com.mojang.serialization.MapCodec;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
-import foundry.veil.api.client.render.rendertype.VeilRenderType;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
-import net.minecraft.client.renderer.RenderStateShard;
 
 public record TransparencyLayer(LayerTemplateValue<BlendState> mode) implements RenderTypeLayer {
 
@@ -14,7 +12,7 @@ public record TransparencyLayer(LayerTemplateValue<BlendState> mode) implements 
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        builder.transparencyState(this.mode.parse(params).shard);
+        builder.transparencyState(this.mode.parse(params).nativeState);
     }
 
     @Override
@@ -23,21 +21,15 @@ public record TransparencyLayer(LayerTemplateValue<BlendState> mode) implements 
     }
 
     public enum BlendState {
-        NONE(VeilRenderType.noTransparencyShard()),
-        ADDITIVE(VeilRenderType.additiveTransparencyShard()),
-        LIGHTNING(VeilRenderType.lightningTransparencyShard()),
-        GLINT(VeilRenderType.glintTransparencyShard()),
-        CRUMBLING(VeilRenderType.crumblingTransparencyShard()),
-        TRANSLUCENT(VeilRenderType.translucentTransparencyShard());
+        NONE(java.util.Optional.empty()),
+        ADDITIVE(java.util.Optional.of(new com.mojang.renderpearl.api.pipeline.BlendFunction(com.mojang.renderpearl.api.pipeline.BlendFactor.ONE, com.mojang.renderpearl.api.pipeline.BlendFactor.ONE))),
+        LIGHTNING(java.util.Optional.of(com.mojang.renderpearl.api.pipeline.BlendFunction.LIGHTNING)),
+        GLINT(java.util.Optional.of(com.mojang.renderpearl.api.pipeline.BlendFunction.GLINT)),
+        CRUMBLING(java.util.Optional.of(new com.mojang.renderpearl.api.pipeline.BlendFunction(com.mojang.renderpearl.api.pipeline.BlendFactor.DST_COLOR, com.mojang.renderpearl.api.pipeline.BlendFactor.SRC_COLOR, com.mojang.renderpearl.api.pipeline.BlendFactor.ONE, com.mojang.renderpearl.api.pipeline.BlendFactor.ZERO))),
+        TRANSLUCENT(java.util.Optional.of(com.mojang.renderpearl.api.pipeline.BlendFunction.TRANSLUCENT));
 
-        private final RenderStateShard.TransparencyStateShard shard;
-
-        BlendState(RenderStateShard.TransparencyStateShard shard) {
-            this.shard = shard;
-        }
-
-        public RenderStateShard.TransparencyStateShard getShard() {
-            return this.shard;
-        }
+        private final java.util.Optional<com.mojang.renderpearl.api.pipeline.BlendFunction> nativeState;
+        BlendState(java.util.Optional<com.mojang.renderpearl.api.pipeline.BlendFunction> nativeState) { this.nativeState = nativeState; }
+        public java.util.Optional<com.mojang.renderpearl.api.pipeline.BlendFunction> getState() { return this.nativeState; }
     }
 }

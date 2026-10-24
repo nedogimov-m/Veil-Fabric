@@ -1,5 +1,6 @@
 package foundry.veil.api.client.editor;
 
+import foundry.imgui.api.ImGuiMC;
 import foundry.veil.Veil;
 import foundry.veil.VeilClient;
 import foundry.veil.api.event.VeilRegisterInspectorsEvent;
@@ -13,10 +14,10 @@ import imgui.ImGui;
 import imgui.flag.ImGuiCol;
 import imgui.type.ImBoolean;
 import it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
-import net.minecraft.Util;
+import net.minecraft.util.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.PreparableReloadListener;
 import net.minecraft.server.packs.resources.ReloadableResourceManager;
 import net.minecraft.server.packs.resources.ResourceManager;
@@ -37,15 +38,10 @@ import java.util.function.Predicate;
  */
 public class EditorManager implements VeilEditorEnvironment, PreparableReloadListener {
 
-    /**
-     * @deprecated Use ImGuiMC#DEFAULT_FONT instead
-     */
-    @ApiStatus.ScheduledForRemoval(inVersion = "5.0.0")
-    @Deprecated
-    public static final ResourceLocation DEFAULT_FONT = ResourceLocation.fromNamespaceAndPath("imguimc", "jetbrains_mono");
+    public static final Identifier DEFAULT_FONT = Veil.veilPath("jetbrains_mono");
 
     private final Map<Inspector, ImBoolean> editors;
-    private final Map<ResourceLocation, ResourceFileEditor<?>> resourceFileEditors;
+    private final Map<Identifier, ResourceFileEditor<?>> resourceFileEditors;
     private boolean enabled;
     private boolean registered;
 
@@ -68,14 +64,13 @@ public class EditorManager implements VeilEditorEnvironment, PreparableReloadLis
         if (!this.registered) {
             this.registered = true;
             VeilClient.clientPlatform().onRegisterInspectors(new EditorRegistry(this));
-            this.reload(
-                    CompletableFuture::completedFuture,
-                    Minecraft.getInstance().getResourceManager(),
-                    InactiveProfiler.INSTANCE,
-                    InactiveProfiler.INSTANCE,
-                    Util.backgroundExecutor(),
-                    Minecraft.getInstance());
+            final var state=new SharedState(Minecraft.getInstance().getResourceManager());
+            this.reload(state,Util.backgroundExecutor(),new PreparationBarrier(){
+                @Override public <T> CompletableFuture<T> wait(T value){return CompletableFuture.completedFuture(value);}
+            },Minecraft.getInstance());
         }
+
+        ImGui.pushFont(ImGuiMC.getFont(DEFAULT_FONT, false, false),0);
 
         if (ImGui.beginMainMenuBar()) {
             ImFont font = ImGui.getFont();
@@ -146,6 +141,8 @@ public class EditorManager implements VeilEditorEnvironment, PreparableReloadLis
 
             next.render();
         }
+
+        ImGui.popFont();
     }
 
     @ApiStatus.Internal
@@ -154,6 +151,8 @@ public class EditorManager implements VeilEditorEnvironment, PreparableReloadLis
             return;
         }
 
+        ImGui.pushFont(ImGuiMC.getFont(DEFAULT_FONT, false, false),0);
+
         for (Map.Entry<Inspector, ImBoolean> entry : this.editors.entrySet()) {
             Inspector inspector = entry.getKey();
             ImBoolean enabled = entry.getValue();
@@ -161,6 +160,8 @@ public class EditorManager implements VeilEditorEnvironment, PreparableReloadLis
                 inspector.renderLast();
             }
         }
+
+        ImGui.popFont();
     }
 
     @ApiStatus.Internal
@@ -212,12 +213,24 @@ public class EditorManager implements VeilEditorEnvironment, PreparableReloadLis
     }
 
     public synchronized void add(Inspector inspector) {
+        InspectorState.attach(inspector, this, () -> this.isVisible(inspector), () -> this.hide(inspector));
         this.editors.computeIfAbsent(inspector, unused -> new ImBoolean());
     }
 
     public synchronized void remove(Inspector inspector) {
         this.hide(inspector);
         this.editors.remove(inspector);
+        InspectorState.detach(inspector, this);
+    }
+
+    /** Release real editor resources and remove their visibility owners at renderer shutdown. */
+    public synchronized void close() {
+        for (Inspector inspector : List.copyOf(this.editors.keySet())) {
+            this.remove(inspector); inspector.free();
+        }
+        this.resourceFileEditors.values().forEach(ResourceFileEditor::close);
+        this.resourceFileEditors.clear();
+        foundry.veil.impl.client.imgui.NativeImGuiAreas.free();
     }
 
     /**
@@ -244,7 +257,7 @@ public class EditorManager implements VeilEditorEnvironment, PreparableReloadLis
     }
 
     @Override
-    public @NotNull CompletableFuture<Void> reload(@NotNull PreparationBarrier preparationBarrier, @NotNull ResourceManager resourceManager, @NotNull ProfilerFiller prepareProfiler, @NotNull ProfilerFiller applyProfiler, @NotNull Executor backgroundExecutor, @NotNull Executor gameExecutor) {
+    public @NotNull CompletableFuture<Void> reload(@NotNull SharedState state, @NotNull Executor backgroundExecutor, @NotNull PreparationBarrier preparationBarrier, @NotNull Executor gameExecutor) {
         List<PreparableReloadListener> listeners = new ArrayList<>(this.editors.size());
         for (Inspector inspector : this.editors.keySet()) {
             if (inspector instanceof PreparableReloadListener listener) {
@@ -260,7 +273,8 @@ public class EditorManager implements VeilEditorEnvironment, PreparableReloadLis
             return preparationBarrier.wait(null);
         }
         PreparableReloadListener listener = CompositeReloadListener.of(listeners.toArray(PreparableReloadListener[]::new));
-        return listener.reload(preparationBarrier, resourceManager, prepareProfiler, applyProfiler, backgroundExecutor, gameExecutor);
+        listener.prepareSharedState(state);
+        return listener.reload(state, backgroundExecutor, preparationBarrier, gameExecutor);
     }
 
     @Override
@@ -268,7 +282,8 @@ public class EditorManager implements VeilEditorEnvironment, PreparableReloadLis
         try {
             ResourceFileEditor<T> open = editor.open(this, resource);
             if (open != null) {
-                this.resourceFileEditors.put(resource.resourceInfo().location(), open);
+                final var previous=this.resourceFileEditors.put(resource.resourceInfo().location(), open);
+                if(previous!=null&&previous!=open)previous.close();
             }
         } catch (Throwable t) {
             Veil.LOGGER.error("Failed to open editor for resource: {}", resource.resourceInfo().location(), t);

@@ -4,7 +4,6 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
-import foundry.veil.api.client.render.VeilRenderBridge;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
 
 /**
@@ -20,9 +19,7 @@ public record DepthClampLayer(boolean enabled) implements RenderTypeLayer {
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        if (this.enabled) {
-            builder.addLayer(VeilRenderBridge.depthClampState());
-        }
+        builder.depthClampState(this.enabled);
     }
 
     @Override

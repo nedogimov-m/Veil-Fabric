@@ -1,4 +1,18 @@
 {
   "vertex": "veil:blit_screen",
-  "fragment": "veil:core/bloom"
+  "fragment": "veil:core/bloom",
+  "textures": {
+    "DiffuseSampler0": {
+      "type": "framebuffer",
+      "name": "minecraft:main"
+    },
+    "BloomSampler": {
+      "type": "framebuffer",
+      "name": "veil:bloom"
+    },
+    "BlurFinal": {
+      "type": "framebuffer",
+      "name": "final"
+    }
+  }
 }

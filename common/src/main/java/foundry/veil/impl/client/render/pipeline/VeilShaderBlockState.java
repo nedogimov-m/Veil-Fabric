@@ -1,174 +1,73 @@
 package foundry.veil.impl.client.render.pipeline;
 
-import foundry.veil.Veil;
-import foundry.veil.api.client.render.VeilRenderSystem;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
 import foundry.veil.api.client.render.shader.block.ShaderBlock;
-import foundry.veil.impl.client.render.shader.block.ShaderBlockImpl;
-import it.unimi.dsi.fastutil.objects.ObjectArraySet;
-import it.unimi.dsi.fastutil.objects.ObjectIterator;
-import it.unimi.dsi.fastutil.objects.ObjectSet;
-import org.jetbrains.annotations.ApiStatus;
-
-import java.util.BitSet;
+import java.util.HashMap;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.WeakHashMap;
 
-/**
- * Manages the state of uniform block bindings and their associated shader names.
- *
- * @author Ocelot
- */
-@ApiStatus.Internal
-public class VeilShaderBlockState {
+/** Named native block selection. Upload/binding is explicit for each actual draw program. */
+public final class VeilShaderBlockState {
+    private final Map<String, ShaderBlock<?>> selected = new HashMap<>();
+    private final Set<String> used = new HashSet<>();
+    private final Map<GpuShaderProgram, Set<String>> applied = new WeakHashMap<>();
 
-    // Flywheel uses the first 8 buffer bindings for instanced/indirect rendering
-    public static final int RESERVED_BINDINGS = Veil.platform().isModLoaded("flywheel") ? 8 : 0;
-
-    private final ObjectSet<ShaderBlockImpl<?>> boundBlocks;
-    private final BitSet usedBindings;
-    private CharSequence[] shaderBindings;
-    private int nextBinding;
-
-    public VeilShaderBlockState() {
-        this.boundBlocks = new ObjectArraySet<>();
-        this.usedBindings = new BitSet();
-        this.shaderBindings = null;
-    }
-
-    /**
-     * Looks for a stale binding that can be replaced with a new one.
-     */
-    private void freeBinding() {
-        ObjectIterator<ShaderBlockImpl<?>> iterator = this.boundBlocks.iterator();
-        while (iterator.hasNext()) {
-            ShaderBlockImpl<?> block = iterator.next();
-            int index = block.getIndex();
-            if (this.usedBindings.get(index)) {
-                continue;
-            }
-
-            // Unbind the buffer if it has an index and move on
-            if (index != -1) {
-                block.unbind(index + RESERVED_BINDINGS);
-                this.usedBindings.clear(index);
-                block.setIndex(-1);
-            }
-
-            iterator.remove();
-            this.nextBinding = index;
-            return;
-        }
-
-        throw new IllegalStateException("Too many shader blocks bound, failed to find empty space.");
-    }
-
-    /**
-     * Binds the specified block and returns the used binding.
-     *
-     * @param block The block to bind
-     * @return The binding used
-     */
-    private int bind(ShaderBlock<?> block) {
-        if (!(block instanceof ShaderBlockImpl<?> impl)) {
-            throw new UnsupportedOperationException("Cannot bind " + block.getClass());
-        }
-
-        int index = impl.getIndex();
-        if (index == -1) {
-            if (this.nextBinding >= VeilRenderSystem.maxUniformBuffersBindings() - RESERVED_BINDINGS) {
-                this.freeBinding();
-            }
-
-            impl.setIndex(index = this.nextBinding);
-
-            // Find the next open binding
-            this.nextBinding = this.usedBindings.nextClearBit(this.nextBinding + 1);
-        }
-
-        this.boundBlocks.add(impl);
-        this.usedBindings.set(index);
-        impl.bind(index + RESERVED_BINDINGS);
-
-        return index;
-    }
-
-    /**
-     * Binds and assigns the bound index to all shaders under the specified name.
-     *
-     * @param name  The name of the block to bind in shader code
-     * @param block The block to bind
-     */
     public void bind(CharSequence name, ShaderBlock<?> block) {
-        if (!(block instanceof ShaderBlockImpl<?> impl)) {
-            throw new UnsupportedOperationException("Cannot bind " + block.getClass());
+        String binding = name.toString();
+        if (!binding.matches("[A-Za-z_][A-Za-z0-9_]*")) throw new IllegalArgumentException("Invalid shader block binding name: " + binding);
+        this.selected.put(binding, Objects.requireNonNull(block)); this.used.add(binding);
+    }
+    public void unbind(ShaderBlock<?> block) { this.selected.values().removeIf(value -> value == block); }
+    /** Capture selection and serialized values now, without issuing commands in the active vanilla pass. */
+    public Map<String, ShaderBlock.Snapshot> snapshot(GpuShaderProgram program) {
+        Map<String, ShaderBlock.Snapshot> snapshots = new HashMap<>();
+        this.selected.forEach((name, block) -> {
+            if (program.bindingTypes().get(name) == com.mojang.renderpearl.api.pipeline.UniformType.UNIFORM_BUFFER)
+                snapshots.put(name, block.snapshot());
+        });
+        return Map.copyOf(snapshots);
+    }
+    /** Capture only explicitly requested named blocks, without inspecting or freezing native draw-owned bindings. */
+    public Map<String, ShaderBlock.Snapshot> snapshot(Collection<String> requestedNames) {
+        Map<String, ShaderBlock.Snapshot> snapshots = new HashMap<>();
+        for (String name : requestedNames) {
+            ShaderBlock<?> block = this.selected.get(name);
+            if (block != null) snapshots.put(name, block.snapshot());
         }
-
-        int binding = this.bind(block);
-        if (this.shaderBindings == null) {
-            this.shaderBindings = new CharSequence[VeilRenderSystem.maxUniformBuffersBindings() - RESERVED_BINDINGS];
-        }
-
-        CharSequence boundName = this.shaderBindings[binding];
-        if (!Objects.equals(name, boundName)) {
-            this.shaderBindings[binding] = name;
-            VeilRenderSystem.renderer().getShaderManager().setGlobal(shader -> {
-                switch (impl.getBinding()) {
-                    case UNIFORM -> shader.setUniformBlock(name, binding + RESERVED_BINDINGS);
-                    case SHADER_STORAGE -> shader.setStorageBlock(name, binding + RESERVED_BINDINGS);
-                }
-            });
+        return Map.copyOf(snapshots);
+    }
+    /** Prepare detached draws without mutating the program's live external bindings. */
+    public static Map<String, com.mojang.renderpearl.api.buffers.GpuBufferSlice> prepareSnapshots(
+            CommandEncoder encoder, Map<String, ShaderBlock.Snapshot> snapshots) {
+        Map<String, com.mojang.renderpearl.api.buffers.GpuBufferSlice> slices = new HashMap<>();
+        snapshots.forEach((name, snapshot) -> slices.put(name, snapshot.prepare(encoder)));
+        return Map.copyOf(slices);
+    }
+    /** Must run before opening the render pass, followed by the program's prepare. */
+    public void prepare(CommandEncoder encoder, GpuShaderProgram program) {
+        Set<String> bindings = new HashSet<>();
+        this.selected.forEach((name, block) -> {
+            if (program.bindingTypes().get(name) != com.mojang.renderpearl.api.pipeline.UniformType.UNIFORM_BUFFER) return;
+            block.prepare(encoder); program.setUniformBlock(name, block.slice()); bindings.add(name);
+        });
+        Set<String> previous = this.applied.put(program, bindings);
+        if (previous != null) for (String name : previous) {
+            if (!bindings.contains(name)) program.removeExternalUniformBlock(name);
         }
     }
-
-    /**
-     * Unbinds the specified shader block.
-     *
-     * @param block The block to unbind
-     */
-    public void unbind(ShaderBlock<?> block) {
-        if (!(block instanceof ShaderBlockImpl<?> impl)) {
-            throw new UnsupportedOperationException("Cannot unbind " + block.getClass());
-        }
-
-        int index = impl.getIndex();
-        if (index == -1) {
-            return;
-        }
-
-        impl.unbind(index + RESERVED_BINDINGS);
-        this.boundBlocks.remove(impl);
-        this.usedBindings.clear(index);
-        impl.setIndex(-1);
-
-        if (this.shaderBindings != null) {
-            CharSequence name = this.shaderBindings[index];
-            if (name != null) {
-                this.shaderBindings[index] = null;
-                VeilRenderSystem.renderer().getShaderManager().setGlobal(shader -> {
-                    switch (impl.getBinding()) {
-                        case UNIFORM -> shader.setUniformBlock(name, 0);
-                        case SHADER_STORAGE -> shader.setStorageBlock(name, 0);
-                    }
-                });
-            }
-        }
-
-        // Fill the gap since the spot is open now
-        if (index < this.nextBinding) {
-            this.nextBinding = index;
-        }
-    }
-
-    /**
-     * Forces all shader bindings to be updated next frame.
-     */
-    public void onShaderCompile() {
-        this.shaderBindings = null;
-    }
-
-    /**
-     * Clears all used bindings from the current frame.
-     */
+    /** Retain this frame's selected blocks; discard names no longer requested next frame. */
     public void clearUsedBindings() {
-        this.usedBindings.clear();
+        this.selected.keySet().removeIf(name -> !this.used.contains(name)); this.used.clear();
+    }
+    public void clear() {
+        this.applied.forEach((program, names) -> {
+            if (!program.isClosed()) names.forEach(program::removeExternalUniformBlock);
+        });
+        this.applied.clear(); this.selected.clear(); this.used.clear();
     }
 }

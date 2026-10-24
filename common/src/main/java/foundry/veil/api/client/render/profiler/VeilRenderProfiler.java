@@ -1,12 +1,11 @@
 package foundry.veil.api.client.render.profiler;
 
-import foundry.veil.impl.client.editor.PipelineStatisticsViewer;
 import foundry.veil.impl.client.render.profiler.VeilRenderProfilerImpl;
 
 import java.util.function.Supplier;
 
 /**
- * Collects render information for the {@link PipelineStatisticsViewer}.
+ * Collects render information for the native GPU timing viewer.
  *
  * @since 2.0.0
  */

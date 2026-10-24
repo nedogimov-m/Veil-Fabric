@@ -2,13 +2,15 @@ package foundry.veil.api.resource;
 
 import com.mojang.serialization.Lifecycle;
 import foundry.veil.mixin.registry.accessor.RegistryDataAccessor;
-import net.minecraft.Util;
+import net.minecraft.util.Util;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.RegistryDataLoader;
+import net.minecraft.resources.RegistryLoadTask;
+import net.minecraft.resources.ResourceManagerRegistryLoadTask;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManager;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
@@ -45,29 +47,25 @@ public class VeilDynamicRegistry {
     @SuppressWarnings("RedundantOperationOnEmptyContainer")
     public static CompletableFuture<Data> loadRegistries(ResourceManager resourceManager, Collection<RegistryDataLoader.RegistryData<?>> registries, Executor executor) {
         Map<ResourceKey<?>, Exception> errors = new ConcurrentHashMap<>();
-        List<RegistryDataLoader.Loader<?>> loaders = registries.stream()
-                .<RegistryDataLoader.Loader<?>>map(data -> ((RegistryDataAccessor) (Object) data).invokeCreate(Lifecycle.stable(), errors))
+        List<RegistryLoadTask<?>> loaders = registries.stream()
+                .<RegistryLoadTask<?>>map(data -> new ResourceManagerRegistryLoadTask<>(data, Lifecycle.stable(), errors, resourceManager))
                 .toList();
-        RegistryOps.RegistryInfoLookup ctx = RegistryDataLoader.createContext(RegistryAccess.EMPTY, loaders);
-        return Util.sequence(loaders.stream().map(loader -> CompletableFuture.supplyAsync(() -> {
-            LOADING.set(true);
-            loader.loadFromResources(resourceManager, ctx);
-            LOADING.set(false);
-
-            Registry<?> registry = loader.registry();
-
-            try {
-                registry.freeze();
-            } catch (Exception e) {
-                errors.put(registry.key(), e);
-            }
-
-            if (loader.data().requiredNonEmpty() && registry.size() == 0) {
-                errors.put(registry.key(), new IllegalStateException("Registry must be non-empty"));
-            }
-
-            return registry;
-        }, executor)).toList()).thenApply(list -> new Data(new RegistryAccess.ImmutableRegistryAccess(list).freeze(), Collections.unmodifiableMap(errors)));
+        RegistryOps.RegistryInfoLookup ctx = RegistryDataAccessor.veil$createContext(List.of(), loaders);
+        Executor scoped = task -> executor.execute(() -> {
+            boolean previous = LOADING.get(); LOADING.set(true);
+            try { task.run(); } finally { LOADING.set(previous); }
+        });
+        List<CompletableFuture<?>> pending = loaders.stream().<CompletableFuture<?>>map(loader -> {
+            boolean previous = LOADING.get(); LOADING.set(true);
+            try { return loader.load(ctx, scoped); } finally { LOADING.set(previous); }
+        }).toList();
+        return CompletableFuture.allOf(pending.toArray(CompletableFuture[]::new)).thenApply(ignored -> {
+            List<Registry<?>> loaded = new java.util.ArrayList<>();
+            // Native validators may inspect another registry: freeze every registry before validating any.
+            List<RegistryLoadTask<?>> frozen = loaders.stream().filter(loader -> loader.freezeRegistry(errors)).toList();
+            for (RegistryLoadTask<?> loader : frozen) loader.validateRegistry(errors).ifPresent(loaded::add);
+            return new Data(new RegistryAccess.ImmutableRegistryAccess(loaded).freeze(), Map.copyOf(errors));
+        });
     }
 
     /**
@@ -83,7 +81,7 @@ public class VeilDynamicRegistry {
 
         StringWriter stringWriter = new StringWriter();
         PrintWriter printWriter = new PrintWriter(stringWriter);
-        Map<ResourceLocation, Map<ResourceLocation, Exception>> sortedErrors = errors.entrySet().stream().collect(Collectors.groupingBy(entry -> entry.getKey().registry(), Collectors.toMap(entry -> entry.getKey().location(), Map.Entry::getValue)));
+        Map<Identifier, Map<Identifier, Exception>> sortedErrors = errors.entrySet().stream().collect(Collectors.groupingBy(entry -> entry.getKey().registry(), Collectors.toMap(entry -> entry.getKey().identifier(), Map.Entry::getValue)));
         sortedErrors.entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(registryError -> {
             printWriter.printf("%n> %d Errors in registry %s:", registryError.getValue().size(), registryError.getKey());
             registryError.getValue().entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(elementError -> {

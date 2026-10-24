@@ -1,178 +1,57 @@
 package foundry.veil.impl.client.render.pipeline;
 
-import foundry.veil.Veil;
-import foundry.veil.api.client.registry.VeilShaderBufferRegistry;
-import foundry.veil.api.client.render.VeilRenderSystem;
+import com.mojang.renderpearl.api.device.GpuDevice;
 import foundry.veil.api.client.render.VeilShaderBufferLayout;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
 import foundry.veil.api.client.render.shader.block.ShaderBlock;
-import foundry.veil.api.client.render.shader.program.ShaderProgram;
 import foundry.veil.impl.client.render.LayoutSerializer;
 import foundry.veil.impl.client.render.shader.block.LayoutShaderBlockImpl;
-import foundry.veil.impl.client.render.shader.block.ShaderBlockImpl;
-import foundry.veil.impl.client.render.shader.program.ShaderProgramImpl;
-import net.minecraft.resources.ResourceLocation;
-import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.Nullable;
+import net.minecraft.resources.Identifier;
+import java.util.Collection;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Supplier;
 import org.lwjgl.system.NativeResource;
 
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
+/** Registered object block cache. Immutable std140 schemas survive native shader reload. */
+public final class VeilShaderBufferCache implements NativeResource {
+    private final Supplier<GpuDevice> device;
+    private final Supplier<? extends Collection<VeilShaderBufferLayout<?>>> layouts;
+    private final VeilShaderBlockState state;
+    private final Map<VeilShaderBufferLayout<?>, LayoutShaderBlockImpl<?>> values = new IdentityHashMap<>();
 
-/**
- * Manages the existence of registered shader blocks.
- *
- * @author Ocelot
- */
-@ApiStatus.Internal
-public class VeilShaderBufferCache implements NativeResource {
-
-    private LayoutShaderBlockImpl<?>[] values;
-    private VeilShaderBufferLayout<?>[] layouts;
-
-    public void onShaderCompile(Map<ResourceLocation, ShaderProgram> updatedPrograms) {
-        if (this.layouts == null) {
-            this.layouts = VeilShaderBufferRegistry.REGISTRY.stream().toArray(VeilShaderBufferLayout[]::new);
-            this.values = new LayoutShaderBlockImpl[this.layouts.length];
-        }
-
-        for (ShaderProgram shader : updatedPrograms.values()) {
-            if (shader instanceof ShaderProgramImpl impl) {
-                impl.clearShaderBlocks();
-            }
-        }
-
-        for (int i = 0; i < this.values.length; i++) {
-            LayoutShaderBlockImpl<?> block = this.values[i];
-            if (block != null) {
-                Set<ResourceLocation> shaders = block.getReferencedShaders();
-                if (shaders.removeAll(updatedPrograms.keySet()) && shaders.isEmpty()) {
-                    // Since no old shaders reference it anymore, delete it and allow it to be created again
-                    block.free();
-                    this.values[i] = null;
-                }
-            }
-
-            VeilShaderBufferLayout<?> layout = this.layouts[i];
-            boolean packed = layout.memoryLayout() == ShaderBlock.MemoryLayout.PACKED;
-            String name = layout.name();
-            for (ShaderProgram shader : updatedPrograms.values()) {
-                int index = switch (layout.binding()) {
-                    case UNIFORM -> shader.getUniformBlock(name);
-                    case SHADER_STORAGE -> shader.getStorageBlock(name);
-                };
-
-                if (index == -1) {
-                    continue;
-                }
-
-                if (this.values[i] == null) {
-                    block = LayoutSerializer.create(layout, shader, name, index);
-                    block.getReferencedShaders().add(shader.getName());
-                    this.values[i] = block;
-                    if (packed && shader instanceof ShaderProgramImpl impl) {
-                        impl.addShaderBlock(name, block);
-                    }
-                } else {
-                    this.values[i].getReferencedShaders().add(shader.getName());
-                }
-                break;
-            }
-
-            // Validate only a single shader uses the block
-            if (packed) {
-                block = this.values[i];
-                if (block == null) {
-                    continue;
-                }
-                Set<ResourceLocation> shaders = block.getReferencedShaders();
-                if (shaders.size() != 1) {
-                    String error = shaders.stream().map(ResourceLocation::toString).collect(Collectors.joining(", "));
-                    Veil.LOGGER.error("Shader Block {} uses the 'packed' memory layout and only supports a single shader using the block. Either use a different format or only use the block in one shader. Affected shaders: {}", name, error);
-                }
-            }
+    public VeilShaderBufferCache(Supplier<GpuDevice> device, Supplier<? extends Collection<VeilShaderBufferLayout<?>>> layouts,
+            VeilShaderBlockState state) {
+        this.device = Objects.requireNonNull(device); this.layouts = Objects.requireNonNull(layouts); this.state = Objects.requireNonNull(state);
+    }
+    private void validate(VeilShaderBufferLayout<?> layout) {
+        if (this.layouts.get().stream().noneMatch(registered -> registered == layout)) {
+            throw new IllegalArgumentException("Attempted to use unregistered buffer layout: " + layout.name());
         }
     }
-
-    public void bind() {
-        if (this.values == null) {
-            return;
-        }
-
-        for (int i = 0; i < this.values.length; i++) {
-            LayoutShaderBlockImpl<?> block = this.values[i];
-            if (block != null && this.layouts[i].memoryLayout() != ShaderBlock.MemoryLayout.PACKED) {
-                VeilRenderSystem.bind(this.layouts[i].name(), block);
-            }
-        }
-    }
-
-    public void unbindPacked() {
-        if (this.values == null) {
-            return;
-        }
-
-        for (int i = 0; i < this.values.length; i++) {
-            LayoutShaderBlockImpl<?> block = this.values[i];
-            if (block != null && this.layouts[i].memoryLayout() == ShaderBlock.MemoryLayout.PACKED) {
-                VeilRenderSystem.unbind(block);
-            }
-        }
-    }
-
     @SuppressWarnings("unchecked")
-    public <T> @Nullable ShaderBlock<T> getBlock(VeilShaderBufferLayout<T> layout) throws IllegalArgumentException {
-        if (this.values == null) {
-            return null;
-        }
-
-        int id = VeilShaderBufferRegistry.REGISTRY.getId(layout);
-        if (id < 0 || id >= this.values.length) {
-            throw new IllegalArgumentException("Attempted to use unregistered buffer layout: " + layout.name());
-        }
-        return (ShaderBlockImpl<T>) this.values[id];
+    public <T> ShaderBlock<T> getBlock(VeilShaderBufferLayout<T> layout) {
+        this.validate(layout);
+        return (ShaderBlock<T>) this.values.computeIfAbsent(layout, ignored -> LayoutSerializer.create(layout, this.device.get()));
     }
-
-    public void bind(VeilShaderBufferLayout<?> layout) throws IllegalArgumentException {
-        if (this.values == null) {
-            return;
-        }
-
-        int id = VeilShaderBufferRegistry.REGISTRY.getId(layout);
-        if (id < 0 || id >= this.values.length) {
-            throw new IllegalArgumentException("Attempted to use unregistered buffer layout: " + layout.name());
-        }
-        LayoutShaderBlockImpl<?> block = this.values[id];
-        if (block != null) {
-            VeilRenderSystem.bind(this.layouts[id].name(), block);
-        }
-    }
-
-    public void unbind(VeilShaderBufferLayout<?> layout) throws IllegalArgumentException {
-        if (this.values == null) {
-            return;
-        }
-
-        int id = VeilShaderBufferRegistry.REGISTRY.getId(layout);
-        if (id < 0 || id >= this.values.length) {
-            throw new IllegalArgumentException("Attempted to use unregistered buffer layout: " + layout.name());
-        }
-        LayoutShaderBlockImpl<?> block = this.values[id];
-        if (block != null) {
-            VeilRenderSystem.unbind(block);
-        }
-    }
-
-    @Override
-    public void free() {
-        if (this.values != null) {
-            for (int i = 0; i < this.values.length; i++) {
-                LayoutShaderBlockImpl<?> block = this.values[i];
-                if (block != null) {
-                    block.free();
-                }
-                this.values[i] = null;
+    public void onShaderCompile(Map<Identifier, GpuShaderProgram> programs) {
+        for (var layout : this.layouts.get()) {
+            for (var entry : programs.entrySet()) {
+                if (entry.getValue().bindingTypes().get(layout.name()) != com.mojang.renderpearl.api.pipeline.UniformType.UNIFORM_BUFFER) continue;
+                this.getBlock(layout);
+                this.values.get(layout).getReferencedShaders().add(entry.getKey());
             }
         }
+    }
+    /** Select all existing global blocks; actual upload occurs for the draw's program. */
+    public void bind() { this.values.forEach((layout, block) -> this.state.bind(layout.name(), block)); }
+    public void bind(VeilShaderBufferLayout<?> layout) { this.state.bind(layout.name(), this.getBlock(layout)); }
+    public void unbind(VeilShaderBufferLayout<?> layout) {
+        this.validate(layout); var block = this.values.get(layout);
+        if (block != null) this.state.unbind(block);
+    }
+    @Override public void free() {
+        this.values.values().forEach(block -> { this.state.unbind(block); block.free(); }); this.values.clear();
     }
 }

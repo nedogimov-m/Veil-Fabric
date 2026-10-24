@@ -61,7 +61,7 @@ public class KeyframedAnimation<P extends SkeletonParent<?, ?>, S extends Skelet
                         Mth.lerp(mixFactor, 1, interpolation.interpolate(a.transform().sz(), b.transform().sz(), t))
                 );
             } else {
-                bone.position.set(
+                bone.size.set(
                         Mth.lerp(mixFactor, bone.position.x, interpolation.interpolate(a.transform().px(), b.transform().px(), t)),
                         Mth.lerp(mixFactor, bone.position.y, interpolation.interpolate(a.transform().py(), b.transform().py(), t)),
                         Mth.lerp(mixFactor, bone.position.z, interpolation.interpolate(a.transform().pz(), b.transform().pz(), t))
@@ -79,16 +79,16 @@ public class KeyframedAnimation<P extends SkeletonParent<?, ?>, S extends Skelet
         }
     }
 
-    public static class Builder<P extends SkeletonParent<?, ?>, S extends Skeleton> {
+    public static class Builder {
         boolean looped = false, additive = false;
         Map<String, List<Keyframe>> timelines = new HashMap<>();
 
-        public Builder<P, S> looped(boolean isLooped) {
+        Builder looped(boolean isLooped) {
             this.looped = isLooped;
             return this;
         }
 
-        public Builder<P, S> additive(boolean isAdditive) {
+        Builder additive(boolean isAdditive) {
             this.additive = isAdditive;
             return this;
         }
@@ -104,7 +104,7 @@ public class KeyframedAnimation<P extends SkeletonParent<?, ?>, S extends Skelet
             timelines.get(boneId).add(new Keyframe(time, interpolation, new Keyframe.KeyframeTransform(position, size, orientation)));
         }
 
-        public KeyframedAnimation<P, S> build() {
+        public KeyframedAnimation<?, ?> build() {
             Map<String, KeyframeTimeline> builtTimelines = new HashMap<>();
             for (Map.Entry<String, List<Keyframe>> timeline : timelines.entrySet()) {
                 List<Keyframe> keyframeList = timeline.getValue();

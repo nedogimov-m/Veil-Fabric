@@ -2,15 +2,18 @@
   "required": true,
   "minVersion": "0.8",
   "package": "foundry.veil.mixin.perspective",
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_25",
   "plugin": "foundry.veil.VeilMixinPluginImpl",
   "client": [
-    "accessor.GameRendererAccessor",
-    "accessor.LevelRendererAccessor",
-    "client.FrustumMixin"
+    "client.FrustumMixin",
+    "accessor.NativePerspectiveCameraAccessor",
+    "accessor.NativePerspectiveExtractorInvoker",
+    "accessor.NativePerspectiveViewAreaAccessor",
+    "client.NativePerspectiveLevelMixin",
+    "accessor.NativePerspectiveBlockEntityAccessor",
+    "accessor.NativePerspectiveTerrainAccessor"
   ],
   "injectors": {
     "defaultRequire": 1
   }
 }
-  

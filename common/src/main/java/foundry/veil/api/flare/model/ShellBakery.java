@@ -4,7 +4,7 @@ import foundry.veil.Veil;
 import foundry.veil.api.flare.data.model.*;
 import net.minecraft.client.renderer.FaceInfo;
 import net.minecraft.core.Direction;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -23,7 +23,7 @@ import java.util.Objects;
  */
 public final class ShellBakery {
 
-    public static final ResourceLocation MISSING_SHELL_LOCATION = Veil.veilPath("builtin/missing");
+    public static final Identifier MISSING_SHELL_LOCATION = Veil.veilPath("builtin/missing");
     public static final BakedShell MISSING_SHELL;
 
     static {
@@ -55,11 +55,13 @@ public final class ShellBakery {
             Direction facing,
             ShellElementRotation rotation) {
         Vector3f normal = facing.step();
-        float[] vertexData = makeVertices(face.uv(), normal, facing, setupShape(from, to), rotation);
+        Vector3f min = new Vector3f(from).div(16.0F).sub(0.5f, 0.0f, 0.5f);
+        Vector3f max = new Vector3f(to).div(16.0F).sub(0.5f, 0.0f, 0.5f);
+        float[] vertexData = makeVertices(face.uv(), normal, facing, min, max, rotation);
         return new FlareBakedQuad(vertexData);
     }
 
-    private static float[] makeVertices(ShellFaceUV uvs, Vector3f normal, Direction direction, float[] posDiv16, @Nullable ShellElementRotation rotation) {
+    private static float[] makeVertices(ShellFaceUV uvs, Vector3f normal, Direction direction, Vector3fc min, Vector3fc max, @Nullable ShellElementRotation rotation) {
         float[] vertexData = new float[32];
         Matrix4f rotationMatrix = null;
         if (rotation != null) {
@@ -72,15 +74,15 @@ public final class ShellBakery {
             rotationMatrix.transformDirection(normal);
         }
         for (int i = 0; i < 4; i++) {
-            bakeVertex(vertexData, i, normal, direction, uvs, posDiv16, rotation, rotationMatrix);
+            bakeVertex(vertexData, i, normal, direction, uvs, min, max, rotation, rotationMatrix);
         }
 
         return vertexData;
     }
 
-    private static void bakeVertex(float[] vertexData, int vertexIndex, Vector3f normal, Direction direction, ShellFaceUV shellFaceUV, float[] posDiv16, @Nullable ShellElementRotation rotation, @Nullable Matrix4f transform) {
+    private static void bakeVertex(float[] vertexData, int vertexIndex, Vector3f normal, Direction direction, ShellFaceUV shellFaceUV, Vector3fc min, Vector3fc max, @Nullable ShellElementRotation rotation, @Nullable Matrix4f transform) {
         FaceInfo.VertexInfo vertexInfo = FaceInfo.fromFacing(direction).getVertexInfo(vertexIndex);
-        Vector3f pos = new Vector3f(posDiv16[vertexInfo.xFace], posDiv16[vertexInfo.yFace], posDiv16[vertexInfo.zFace]);
+        Vector3f pos = vertexInfo.select(min, max);
         if (rotation != null && transform != null) {
             Vector3f origin = new Vector3f(rotation.origin()).div(16.0F).sub(0.5f, 0.0f, 0.5f);
 
@@ -88,18 +90,6 @@ public final class ShellBakery {
             pos.set(offset.x() + origin.x(), offset.y() + origin.y(), offset.z() + origin.z());
         }
         fillVertex(vertexData, vertexIndex, pos, normal, shellFaceUV);
-    }
-
-    private static float[] setupShape(Vector3fc min, Vector3fc max) {
-        float[] vertexPosition = new float[Direction.values().length];
-        //center the center
-        vertexPosition[FaceInfo.Constants.MIN_X] = min.x() / 16.0F - 0.5f;
-        vertexPosition[FaceInfo.Constants.MIN_Y] = min.y() / 16.0F;
-        vertexPosition[FaceInfo.Constants.MIN_Z] = min.z() / 16.0F - 0.5f;
-        vertexPosition[FaceInfo.Constants.MAX_X] = max.x() / 16.0F - 0.5f;
-        vertexPosition[FaceInfo.Constants.MAX_Y] = max.y() / 16.0F;
-        vertexPosition[FaceInfo.Constants.MAX_Z] = max.z() / 16.0F - 0.5f;
-        return vertexPosition;
     }
 
     private static void fillVertex(float[] vertexData, int vertexIndex, Vector3f pos, Vector3f normal, ShellFaceUV shellFaceUV) {

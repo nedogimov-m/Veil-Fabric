@@ -1,869 +1,214 @@
 package foundry.veil.impl.client.editor;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import foundry.imgui.api.ImGuiMC;
-import foundry.veil.Veil;
+import com.mojang.renderpearl.api.pipeline.*;
 import foundry.veil.api.client.editor.SingleWindowInspector;
-import foundry.veil.api.client.imgui.VeilImGuiUtil;
-import foundry.veil.api.client.render.VeilRenderSystem;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
+import foundry.veil.api.client.render.gpu.GpuUniformBuffer;
+import foundry.veil.api.client.render.shader.ShaderManager;
 import foundry.veil.api.client.render.shader.ShaderPreDefinitions;
-import foundry.veil.api.client.render.shader.program.ShaderProgram;
-import foundry.veil.api.client.render.shader.program.ShaderUniformCache;
-import foundry.veil.api.compat.IrisCompat;
-import foundry.veil.api.compat.SodiumCompat;
-import foundry.veil.mixin.debug.accessor.DebugGameRendererAccessor;
-import foundry.veil.mixin.debug.accessor.DebugLevelRendererAccessor;
-import foundry.veil.mixin.debug.accessor.DebugPostChainAccessor;
+import foundry.veil.impl.client.render.shader.debug.NativePipelineRegistry;
 import imgui.ImGui;
 import imgui.ImGuiListClipper;
 import imgui.callback.ImListClipperCallback;
-import imgui.flag.*;
+import imgui.flag.ImGuiInputTextFlags;
+import imgui.flag.ImGuiWindowFlags;
 import imgui.type.ImBoolean;
 import imgui.type.ImString;
-import it.unimi.dsi.fastutil.ints.*;
-import it.unimi.dsi.fastutil.objects.Object2IntMap;
-import it.unimi.dsi.fastutil.objects.Object2IntRBTreeMap;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.EffectInstance;
-import net.minecraft.client.renderer.PostChain;
-import net.minecraft.client.renderer.PostPass;
-import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
-import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.NativeResource;
-
-import java.nio.ByteBuffer;
-import java.nio.DoubleBuffer;
-import java.nio.FloatBuffer;
-import java.nio.IntBuffer;
 import java.util.*;
-import java.util.function.BooleanSupplier;
-import java.util.function.Function;
-import java.util.function.ObjIntConsumer;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
-import static org.lwjgl.opengl.ARBProgramInterfaceQuery.GL_SHADER_STORAGE_BLOCK;
-import static org.lwjgl.opengl.ARBProgramInterfaceQuery.glGetProgramResourceiv;
-import static org.lwjgl.opengl.GL20C.*;
-import static org.lwjgl.opengl.GL21C.*;
-import static org.lwjgl.opengl.GL30C.*;
-import static org.lwjgl.opengl.GL32C.GL_GEOMETRY_SHADER;
-import static org.lwjgl.opengl.GL40C.*;
-import static org.lwjgl.opengl.GL43C.GL_BUFFER_BINDING;
-import static org.lwjgl.opengl.GL43C.GL_COMPUTE_SHADER;
-
-@ApiStatus.Internal
-public class ShaderInspector extends SingleWindowInspector implements ResourceManagerReloadListener {
-
+/** Native live pipeline metadata and declared typed CPU uniforms. Inspection never compiles a shader. */
+public final class ShaderInspector extends SingleWindowInspector implements ResourceManagerReloadListener {
     public static final Component TITLE = Component.translatable("inspector.veil.shader.title");
+    private static @Nullable Runtime runtime;
+    private final ImString filterText = new ImString(128);
+    private final ImString definitionText = new ImString(128);
+    private final ImBoolean infoVisible = new ImBoolean();
+    private final ImBoolean sourceVisible = new ImBoolean();
+    private @Nullable Pattern filter;
+    private String filterError = "";
+    private String namespace = "All";
+    private List<NativePipelineRegistry.Entry> entries = List.of();
+    private @Nullable NativePipelineRegistry.Entry selected;
+    private ImString sourceText = new ImString();
+    private String sourceTitle = "Shader source";
 
-    private static final Component REFRESH = Component.translatable("inspector.veil.shader.button.refresh");
-    private static final Component SEARCH = Component.translatable("inspector.veil.shader.search");
-    private static final Component SHADER_PROGRAMS = Component.translatable("inspector.veil.shader.shader_programs");
-    private static final Component SHADER_DEFINITIONS = Component.translatable("inspector.veil.shader.definitions");
-    private static final Component SHADER_DEFINITIONS_HINT = Component.translatable("inspector.veil.shader.definitions.hint");
-    private static final Component OPEN_SOURCE = Component.translatable("inspector.veil.shader.open_source");
-    private static final Component OPEN_SHADER_INFO = Component.translatable("inspector.veil.shader.open_shader_info");
-    private static final Component SHADER_INFO_WINDOW = Component.translatable("inspector.veil.shader.shader_info");
-    private static final Component SAMPLERS = Component.translatable("inspector.veil.shader.samplers");
-    private static final Component UNIFORMS = Component.translatable("inspector.veil.shader.uniforms");
-    private static final Component UNIFORM_BLOCKS = Component.translatable("inspector.veil.shader.uniform_blocks");
-    private static final Component STORAGE_BLOCKS = Component.translatable("inspector.veil.shader.storage_blocks");
-
-    //    private final CodeEditor codeEditor;
-    private final ImBoolean shaderInfoVisible;
-    private final Object2IntMap<ResourceLocation> shaders;
-
-    private final ImString programFilterText;
-    private Pattern programFilter;
-    private SelectedProgram selectedProgram;
-    private int selectedTab;
-
-    private final ImString addDefinitionText;
-    private final Set<String> removedDefinitions;
-
-    public ShaderInspector() {
-        this.shaders = new Object2IntRBTreeMap<>((a, b) -> {
-            int compare = a.getNamespace().compareTo(b.getNamespace());
-            if (compare == 0) {
-                return a.getPath().compareTo(b.getPath());
-            }
-            return compare;
-        });
-
-//        this.codeEditor = new CodeEditor(TITLE, null);
-//        this.codeEditor.getEditor().setLanguageDefinition(VeilLanguageDefinitions.glsl());
-        this.shaderInfoVisible = new ImBoolean(false);
-
-        this.programFilterText = new ImString(128);
-        this.programFilter = null;
-        this.selectedProgram = null;
-        this.selectedTab = 0;
-
-        this.addDefinitionText = new ImString(128);
-        this.removedDefinitions = new HashSet<>(1);
+    public static void bindRuntime(ShaderManager shaders, ShaderPreDefinitions definitions, ResourceManager resources) {
+        runtime = new Runtime(Objects.requireNonNull(shaders), Objects.requireNonNull(definitions), Objects.requireNonNull(resources));
     }
-
-    private void setSelectedProgram(@Nullable ResourceLocation name) {
-        if (this.selectedProgram != null) {
-            this.selectedProgram.free();
+    public static void unbindRuntime() { runtime = null; }
+    @Override public Component getDisplayName() { return TITLE; }
+    @Override public Component getGroup() { return RENDERER_GROUP; }
+    @Override public void onShow() { super.onShow(); this.refresh(); }
+    private void refresh() {
+        this.entries = NativePipelineRegistry.snapshot();
+        if (this.selected != null && this.entries.stream().noneMatch(entry -> entry.definition() == this.selected.definition())) this.selected = null;
+    }
+    @Override protected void renderComponents() {
+        if (ImGui.button("Refresh")) this.refresh();
+        ImGui.sameLine(); ImGui.text(this.entries.size() + " live compiled pipelines");
+        if (ImGui.beginCombo("Namespace", this.namespace)) {
+            Set<String> namespaces = new TreeSet<>(); namespaces.add("All");
+            this.entries.forEach(entry -> namespaces.add(entry.definition().getLocation().getNamespace()));
+            for (String name : namespaces) if (ImGui.selectable(name, this.namespace.equals(name))) this.namespace = name;
+            ImGui.endCombo();
         }
-
-        if (name != null && this.shaders.containsKey(name)) {
-            int program = this.shaders.getInt(name);
-            if (glIsProgram(program)) {
-                this.selectedProgram = SelectedProgram.create(name, program);
-                return;
-            } else {
-                Veil.LOGGER.error("Compiled shader does not exist for program: {}", name);
-            }
+        if (ImGui.inputTextWithHint("##pipeline_filter", "Regular expression", this.filterText)) {
+            this.filter = null; this.filterError = "";
+            if (!this.filterText.isEmpty()) try { this.filter = Pattern.compile(this.filterText.get()); }
+            catch (PatternSyntaxException failure) { this.filterError = failure.getDescription(); }
         }
-
-        this.selectedProgram = null;
-    }
-
-    private void setEditShaderSource(int shader) {
-//        this.codeEditor.show(null, glGetShaderSource(shader));
-    }
-
-    private void reloadShaders() {
-        if (this.selectedProgram != null) {
-            this.selectedProgram.update();
-        }
-        this.shaders.clear();
-        TabSource.values()[this.selectedTab].addShaders(this.shaders::put);
-        if (this.isShaderInvalid() || (this.selectedProgram != null && !this.shaders.containsKey(this.selectedProgram.name))) {
-            this.setSelectedProgram(null);
-        }
-    }
-
-    private boolean isShaderInvalid() {
-        return this.selectedProgram == null || this.selectedProgram.isShaderInvalid();
-    }
-
-    @Override
-    public Component getDisplayName() {
-        return TITLE;
-    }
-
-    @Override
-    public Component getGroup() {
-        return RENDERER_GROUP;
-    }
-
-    @Override
-    protected void renderComponents() {
-//        this.codeEditor.getEditor().setReadOnly(true);
-        this.removedDefinitions.clear();
-
-        ImGui.beginChild("##shader_programs", ImGui.getContentRegionAvailX() * 2 / 3, 0);
-        ImGuiMC.component(SHADER_PROGRAMS);
-
-        TabSource[] sources = TabSource.values();
-        if (ImGui.beginTabBar("##controls")) {
-            if (ImGui.tabItemButton(REFRESH.getString())) {
-                this.reloadShaders();
-            }
-            for (TabSource source : sources) {
-                ImGui.beginDisabled(!source.active.getAsBoolean());
-                if (ImGui.beginTabItem(source.displayName.getString())) {
-                    if (this.selectedTab != source.ordinal()) {
-                        this.selectedTab = source.ordinal();
-                        this.setSelectedProgram(null);
-                        this.reloadShaders();
-                    }
-                    ImGui.endTabItem();
+        if (!this.filterError.isEmpty()) ImGui.textWrapped(this.filterError);
+        if (ImGui.beginChild("##native_pipelines", ImGui.getContentRegionAvailX() * .6f, 0)) {
+            if (ImGui.beginListBox("##pipelines", -Float.MIN_VALUE, -Float.MIN_VALUE)) {
+                for (var entry : this.entries) {
+                    String name = entry.definition().getLocation().toString();
+                    if (!this.namespace.equals("All") && !entry.definition().getLocation().getNamespace().equals(this.namespace)) continue;
+                    if (this.filter != null && !this.filter.matcher(name).find()) continue;
+                    String label = name + "##" + System.identityHashCode(entry.definition());
+                    if (ImGui.selectable(label, this.selected != null && entry.definition() == this.selected.definition())) this.selected = entry;
+                    if (ImGui.isItemHovered()) ImGui.setTooltip(entry.definition().getPrimitiveTopology() + ", " + entry.definition().getColorTargetStates().size() + " color targets");
                 }
-                ImGui.endDisabled();
-            }
-            ImGui.endTabBar();
-        }
-
-        // Deselect the tab if it is no longer active
-        while (!sources[this.selectedTab].active.getAsBoolean() && this.selectedTab > 0) {
-            this.selectedTab--;
-            this.setSelectedProgram(null);
-            this.reloadShaders();
-        }
-
-        ImGui.setNextItemWidth(ImGui.getContentRegionAvailX());
-        if (ImGui.inputTextWithHint("##search", SEARCH.getString(), this.programFilterText)) {
-            String regex = this.programFilterText.get();
-            this.programFilter = null;
-            if (!regex.isBlank()) {
-                try {
-                    this.programFilter = Pattern.compile(regex);
-                } catch (PatternSyntaxException ignored) {
-                }
+                ImGui.endListBox();
             }
         }
-
-        if (ImGui.beginListBox("##programs", ImGui.getContentRegionAvailX(), -Float.MIN_VALUE)) {
-            for (Object2IntMap.Entry<ResourceLocation> entry : this.shaders.object2IntEntrySet()) {
-                ResourceLocation name = entry.getKey();
-                boolean selected = this.selectedProgram != null && name.equals(this.selectedProgram.name);
-
-                if (this.programFilter != null && !this.programFilter.matcher(name.toString()).find()) {
-                    if (selected) {
-                        this.setSelectedProgram(null);
-                    }
-                    continue;
+        ImGui.endChild(); ImGui.sameLine();
+        if (ImGui.beginChild("##native_pipeline_controls", 0, 0)) {
+            if (this.selected != null && this.selected.isLive()) {
+                ImGui.textWrapped(this.selected.definition().getLocation().toString());
+                for (var shader : this.selected.definition().getShaders().entrySet()) {
+                    if (ImGui.button("Open " + shader.getKey().name().toLowerCase(Locale.ROOT) + " source")) this.openSource(shader.getKey(), shader.getValue());
                 }
-
-                if (ImGui.selectable("##" + name.toString(), selected)) {
-                    this.setSelectedProgram(name);
-                }
-
-                ImGui.sameLine();
-                VeilImGuiUtil.resourceLocation(name);
-
-                ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, 0, ImGui.getStyle().getItemSpacingY());
-                ImGui.sameLine();
-                ImGui.text(" (" + entry.getIntValue() + ")");
-                ImGui.popStyleVar();
+                if (ImGui.button("Pipeline and uniforms")) this.infoVisible.set(true);
             }
-
-            ImGui.endListBox();
+            this.renderDefinitions();
         }
         ImGui.endChild();
-
-        ShaderPreDefinitions definitions = VeilRenderSystem.renderer().getShaderDefinitions();
-        ImGui.sameLine();
-        if (ImGui.beginChild("##panel", 0, ImGui.getContentRegionAvailY())) {
-            if (ImGui.beginChild("##open_source", 0, ImGui.getContentRegionAvailY() / 2)) {
-                ImGuiMC.component(OPEN_SOURCE);
-
-                this.openShaderButton(GL_FRAGMENT_SHADER);
-                this.openShaderButton(GL_VERTEX_SHADER);
-                this.openShaderButton(GL_COMPUTE_SHADER);
-                this.openShaderButton(GL_GEOMETRY_SHADER);
-                this.openShaderButton(GL_TESS_CONTROL_SHADER);
-                this.openShaderButton(GL_TESS_EVALUATION_SHADER);
-
-                ImGui.beginDisabled(this.shaderInfoVisible.get());
-                if (ImGui.button(OPEN_SHADER_INFO.getString())) {
-                    this.shaderInfoVisible.set(true);
-                }
-                ImGui.endDisabled();
-            }
-            ImGui.endChild();
-
-            if (ImGui.beginChild("##shader_definitions", 0, ImGui.getContentRegionAvailY())) {
-                ImGuiMC.component(SHADER_DEFINITIONS);
-                ImGui.setNextItemWidth(ImGui.getContentRegionAvailX());
-                if (ImGui.inputTextWithHint("##add_definition", SHADER_DEFINITIONS_HINT.getString(), this.addDefinitionText, ImGuiInputTextFlags.EnterReturnsTrue)) {
-                    String[] parts = this.addDefinitionText.get().split("=", 2);
-                    definitions.set(parts[0].trim(), parts.length > 1 ? parts[1].trim() : null);
-                    this.addDefinitionText.clear();
-                }
-                if (ImGui.beginListBox("##definitions", -Float.MIN_VALUE, ImGui.getContentRegionAvailY())) {
-                    for (Map.Entry<String, String> entry : definitions.getDefinitions().entrySet()) {
-                        String name = entry.getKey();
-                        String value = entry.getValue();
-
-                        ImGui.pushID(name);
-                        ImGui.text(value);
-
-                        float size = ImGui.getTextLineHeightWithSpacing();
-                        ImGui.sameLine();
-                        ImGui.dummy(ImGui.getContentRegionAvailX() - ImGui.getStyle().getCellPaddingX() * 2 - size, 0);
-                        ImGui.sameLine();
-                        if (ImGui.button("X", size, size)) {
-                            this.removedDefinitions.add(name);
-                        }
-
-                        ImGui.popID();
-                    }
-
-                    ImGui.endListBox();
-                }
-            }
-            ImGui.endChild();
-        }
-        ImGui.endChild();
-
-        for (String name : this.removedDefinitions) {
-            definitions.remove(name);
-        }
     }
-
-    @Override
-    public void render() {
-        ImGui.setNextWindowSizeConstraints(600, 400, Float.MAX_VALUE, Float.MAX_VALUE);
-
-        super.render();
-
-//        this.codeEditor.renderWindow();
-        if (this.shaderInfoVisible.get()) {
-            ImGui.setNextWindowSizeConstraints(500, 600, Float.MAX_VALUE, Float.MAX_VALUE);
-            if (ImGui.begin(SHADER_INFO_WINDOW.getString(), this.shaderInfoVisible, ImGuiWindowFlags.NoSavedSettings)) {
-                boolean invalid = this.isShaderInvalid();
-                ImGui.beginDisabled(invalid);
-                int program = invalid ? 0 : this.selectedProgram.programId;
-                ShaderUniformCache uniforms = this.selectedProgram != null ? this.selectedProgram.uniforms : null;
-
-                if (ImGui.collapsingHeader(SAMPLERS.getString(), ImGuiTreeNodeFlags.DefaultOpen) && !invalid) {
-                    ImGui.indent();
-                    for (Map.Entry<String, ShaderUniformCache.Uniform> entry : uniforms.getSamplers().entrySet()) {
-                        ImGui.selectable(entry.getKey() + ": " + glGetUniformi(program, entry.getValue().location()));
-                    }
-                    ImGui.unindent();
-                }
-
-                if (ImGui.collapsingHeader(UNIFORMS.getString(), ImGuiTreeNodeFlags.DefaultOpen) && !invalid) {
-                    ImGui.indent();
-                    List<Map.Entry<String, ShaderUniformCache.Uniform>> sorted = uniforms.getUniforms()
-                            .entrySet()
-                            .stream()
-                            .filter(entry -> !uniforms.hasSampler(entry.getKey()))
-                            .sorted(Comparator.comparingInt(entry -> entry.getValue().location()))
-                            .toList();
-                    for (Map.Entry<String, ShaderUniformCache.Uniform> entry : sorted) {
-                        String name = entry.getKey();
-                        ShaderUniformCache.Uniform uniform = entry.getValue();
-                        ImGui.selectable(this.formatUniform(name, program, uniform));
-                    }
-                    ImGui.unindent();
-                }
-
-                if (ImGui.collapsingHeader(UNIFORM_BLOCKS.getString(), ImGuiTreeNodeFlags.DefaultOpen) && !invalid) {
-                    ImGui.indent();
-                    List<Map.Entry<String, ShaderUniformCache.UniformBlock>> sorted = uniforms.getUniformBlocks()
-                            .entrySet()
-                            .stream()
-                            .sorted(Comparator.comparingInt(entry -> entry.getValue().index()))
-                            .toList();
-                    for (Map.Entry<String, ShaderUniformCache.UniformBlock> entry : sorted) {
-                        String blockName = entry.getKey();
-                        if (ImGui.collapsingHeader(blockName)) {
-                            ImGui.indent();
-
-                            ShaderUniformCache.UniformBlock block = entry.getValue();
-                            int buffer = glGetIntegeri(GL_UNIFORM_BUFFER_BINDING, glGetActiveUniformBlocki(program, block.index(), GL_UNIFORM_BLOCK_BINDING));
-                            RenderSystem.glBindBuffer(GL_COPY_READ_BUFFER, buffer);
-                            ByteBuffer data = glMapBuffer(GL_COPY_READ_BUFFER, GL_READ_ONLY, block.size(), null);
-                            for (ShaderUniformCache.Uniform field : block.fields()) {
-                                String name = field.name().startsWith(blockName) ? field.name().substring(blockName.length() + 1) : field.name();
-                                ImGui.selectable(data != null ? this.formatBuffer(name, data, field, 0) : name);
-                            }
-                            glUnmapBuffer(GL_COPY_READ_BUFFER);
-                            ImGui.unindent();
-                        }
-                    }
-                    ImGui.unindent();
-                }
-
-                ImGui.beginDisabled(!VeilRenderSystem.shaderStorageBufferSupported());
-                if (ImGui.collapsingHeader(STORAGE_BLOCKS.getString(), ImGuiTreeNodeFlags.DefaultOpen) && !invalid) {
-                    ImGui.indent();
-                    List<Map.Entry<String, ShaderUniformCache.StorageBlock>> sorted = uniforms.getStorageBlocks()
-                            .entrySet()
-                            .stream()
-                            .sorted(Comparator.comparingInt(entry -> entry.getValue().index()))
-                            .toList();
-                    try (MemoryStack stack = MemoryStack.stackPush()) {
-                        IntBuffer properties = stack.ints(GL_BUFFER_BINDING);
-                        IntBuffer buffer = stack.mallocInt(1);
-
-                        for (Map.Entry<String, ShaderUniformCache.StorageBlock> entry : sorted) {
-                            String blockName = entry.getKey();
-                            if (ImGui.collapsingHeader(blockName)) {
-                                ImGui.indent();
-
-                                ShaderUniformCache.StorageBlock block = entry.getValue();
-                                glGetProgramResourceiv(program, GL_SHADER_STORAGE_BLOCK, block.index(), properties, null, buffer);
-                                RenderSystem.glBindBuffer(GL_COPY_READ_BUFFER, buffer.get(0));
-                                int size = block.array() ? glGetBufferParameteri(GL_COPY_READ_BUFFER, GL_BUFFER_SIZE) : block.size();
-                                ByteBuffer data = glMapBuffer(GL_COPY_READ_BUFFER, GL_READ_ONLY, size, null);
-
-                                ShaderUniformCache.Uniform[] fields = block.fields();
-                                for (int i = 0; i < fields.length; i++) {
-                                    ShaderUniformCache.Uniform field = fields[i];
-                                    String name = field.name().startsWith(blockName) ? field.name().substring(blockName.length() + 1) : field.name();
-
-                                    if (block.array() && i >= fields.length - 1 && data != null) {
-                                        ImGuiListClipper.forEach((data.limit() - field.offset()) / block.arrayStride(), (int) ImGui.getTextLineHeightWithSpacing(), new ImListClipperCallback() {
-                                            @Override
-                                            public void accept(int index) {
-                                                ImGui.selectable(ShaderInspector.this.formatBuffer(name, data, field, index));
-                                            }
-                                        });
-                                        continue;
-                                    }
-
-                                    ImGui.selectable(data != null ? this.formatBuffer(name, data, field, 0) : name);
-                                }
-                                glUnmapBuffer(GL_COPY_READ_BUFFER);
-                                ImGui.unindent();
-                            }
-                        }
-                    }
-                    ImGui.unindent();
-                }
-                ImGui.endDisabled();
-
-                ImGui.endDisabled();
+    private void renderDefinitions() {
+        Runtime owner = runtime;
+        if (owner == null) return;
+        ImGui.separator(); ImGui.text("Shader definitions");
+        if (ImGui.inputTextWithHint("##native_definition", "NAME=value", this.definitionText, ImGuiInputTextFlags.EnterReturnsTrue)) {
+            String[] parts = this.definitionText.get().split("=", 2); String name = parts[0].trim();
+            if (name.matches("[A-Za-z_][A-Za-z0-9_]*")) { owner.definitions.set(name, parts.length == 1 ? null : parts[1].trim()); this.definitionText.clear(); }
+        }
+        List<String> remove = new ArrayList<>();
+        for (var definition : owner.definitions.getDefinitions().entrySet()) {
+            ImGui.pushID(definition.getKey()); ImGui.textWrapped(definition.getKey() + "=" + definition.getValue()); ImGui.sameLine();
+            if (ImGui.smallButton("X")) remove.add(definition.getKey());
+            ImGui.popID();
+        }
+        remove.forEach(owner.definitions::remove);
+    }
+    @Override public void render() {
+        ImGui.setNextWindowSizeConstraints(600, 400, Float.MAX_VALUE, Float.MAX_VALUE); super.render();
+        if (this.infoVisible.get()) {
+            if (ImGui.begin("Native pipeline and uniforms", this.infoVisible, ImGuiWindowFlags.NoSavedSettings)) this.renderInfo();
+            ImGui.end();
+        }
+        if (this.sourceVisible.get()) {
+            if (ImGui.begin(this.sourceTitle, this.sourceVisible, ImGuiWindowFlags.NoSavedSettings)) {
+                if (ImGui.button("Copy source")) ImGui.setClipboardText(this.sourceText.get());
+                ImGui.textWrapped("Resource source. Native preprocessing and includes are applied when the pipeline compiles.");
+                ImGui.inputTextMultiline("##native_shader_source", this.sourceText, -Float.MIN_VALUE, -Float.MIN_VALUE, ImGuiInputTextFlags.ReadOnly);
             }
             ImGui.end();
         }
     }
-
-    //<editor-fold desc="Uniform Formatting">
-
-    private String formatUniform(String name, int program, ShaderUniformCache.Uniform uniform) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            return switch (uniform.type()) {
-                case GL_FLOAT -> this.formatUniformFloats(stack, "float " + name, program, uniform.location(), 1, 1);
-                case GL_FLOAT_VEC2 ->
-                        this.formatUniformFloats(stack, "vec2 " + name, program, uniform.location(), 2, 1);
-                case GL_FLOAT_VEC3 ->
-                        this.formatUniformFloats(stack, "vec3 " + name, program, uniform.location(), 3, 1);
-                case GL_FLOAT_VEC4 ->
-                        this.formatUniformFloats(stack, "vec4 " + name, program, uniform.location(), 4, 1);
-                case GL_DOUBLE -> this.formatUniformDoubles(stack, "double " + name, program, uniform.location(), 1, 1);
-                case GL_DOUBLE_VEC2 ->
-                        this.formatUniformDoubles(stack, "dvec2 " + name, program, uniform.location(), 2, 1);
-                case GL_DOUBLE_VEC3 ->
-                        this.formatUniformDoubles(stack, "dvec3 " + name, program, uniform.location(), 3, 1);
-                case GL_DOUBLE_VEC4 ->
-                        this.formatUniformDoubles(stack, "dvec4 " + name, program, uniform.location(), 4, 1);
-                case GL_INT -> this.formatUniformInts(stack, "int " + name, program, uniform.location(), 1);
-                case GL_INT_VEC2 -> this.formatUniformInts(stack, "ivec2 " + name, program, uniform.location(), 2);
-                case GL_INT_VEC3 -> this.formatUniformInts(stack, "ivec3 " + name, program, uniform.location(), 3);
-                case GL_INT_VEC4 -> this.formatUniformInts(stack, "ivec4 " + name, program, uniform.location(), 4);
-                case GL_UNSIGNED_INT -> this.formatUniformUInts(stack, "uint " + name, program, uniform.location(), 1);
-                case GL_UNSIGNED_INT_VEC2 ->
-                        this.formatUniformUInts(stack, "uvec2 " + name, program, uniform.location(), 2);
-                case GL_UNSIGNED_INT_VEC3 ->
-                        this.formatUniformUInts(stack, "uvec3 " + name, program, uniform.location(), 3);
-                case GL_UNSIGNED_INT_VEC4 ->
-                        this.formatUniformUInts(stack, "uvec4 " + name, program, uniform.location(), 4);
-                case GL_FLOAT_MAT2 ->
-                        this.formatUniformFloats(stack, "mat2 " + name, program, uniform.location(), 2, 2);
-                case GL_FLOAT_MAT3 ->
-                        this.formatUniformFloats(stack, "mat3 " + name, program, uniform.location(), 3, 3);
-                case GL_FLOAT_MAT4 ->
-                        this.formatUniformFloats(stack, "mat4 " + name, program, uniform.location(), 4, 4);
-                case GL_FLOAT_MAT2x3 ->
-                        this.formatUniformFloats(stack, "mat2x3 " + name, program, uniform.location(), 2, 3);
-                case GL_FLOAT_MAT2x4 ->
-                        this.formatUniformFloats(stack, "mat2x4 " + name, program, uniform.location(), 2, 4);
-                case GL_FLOAT_MAT3x2 ->
-                        this.formatUniformFloats(stack, "mat3x2 " + name, program, uniform.location(), 3, 2);
-                case GL_FLOAT_MAT3x4 ->
-                        this.formatUniformFloats(stack, "mat3x4 " + name, program, uniform.location(), 3, 4);
-                case GL_FLOAT_MAT4x2 ->
-                        this.formatUniformFloats(stack, "mat4x2 " + name, program, uniform.location(), 4, 2);
-                case GL_FLOAT_MAT4x3 ->
-                        this.formatUniformFloats(stack, "mat4x3 " + name, program, uniform.location(), 4, 3);
-                case GL_DOUBLE_MAT2 ->
-                        this.formatUniformDoubles(stack, "dmat2 " + name, program, uniform.location(), 2, 2);
-                case GL_DOUBLE_MAT3 ->
-                        this.formatUniformDoubles(stack, "dmat3 " + name, program, uniform.location(), 3, 3);
-                case GL_DOUBLE_MAT4 ->
-                        this.formatUniformDoubles(stack, "dmat4 " + name, program, uniform.location(), 4, 4);
-                case GL_DOUBLE_MAT2x3 ->
-                        this.formatUniformDoubles(stack, "dmat2x3 " + name, program, uniform.location(), 2, 3);
-                case GL_DOUBLE_MAT2x4 ->
-                        this.formatUniformDoubles(stack, "dmat2x4 " + name, program, uniform.location(), 2, 4);
-                case GL_DOUBLE_MAT3x2 ->
-                        this.formatUniformDoubles(stack, "dmat3x2 " + name, program, uniform.location(), 3, 2);
-                case GL_DOUBLE_MAT3x4 ->
-                        this.formatUniformDoubles(stack, "dmat3x4 " + name, program, uniform.location(), 3, 4);
-                case GL_DOUBLE_MAT4x2 ->
-                        this.formatUniformDoubles(stack, "dmat4x2 " + name, program, uniform.location(), 4, 2);
-                case GL_DOUBLE_MAT4x3 ->
-                        this.formatUniformDoubles(stack, "dmat4x3 " + name, program, uniform.location(), 4, 3);
-                default -> name;
-            };
+    private @Nullable GpuShaderProgram selectedProgram() {
+        Runtime owner = runtime;
+        if (owner == null || this.selected == null) return null;
+        return owner.shaders.findShader(this.selected.definition());
+    }
+    private void renderInfo() {
+        if (this.selected == null || !this.selected.isLive()) { ImGui.text("Pipeline has retired. Refresh the list."); return; }
+        RenderPipeline pipeline = this.selected.definition();
+        ImGui.textWrapped(pipeline.getLocation().toString());
+        ImGui.text("Topology: " + pipeline.getPrimitiveTopology() + "; polygon: " + pipeline.getPolygonMode() + "; cull: " + pipeline.isCull());
+        ImGui.textWrapped("Depth: " + pipeline.getDepthStencilState() + "; push constants: " + pipeline.pushConstantSize() + " bytes");
+        for (int index = 0; index < pipeline.getColorTargetStates().size(); index++) ImGui.textWrapped("Color " + index + ": " + pipeline.getColorTargetStates().get(index));
+        if (ImGui.collapsingHeader("Vertex layouts")) {
+            for (int slot = 0; slot < pipeline.getVertexFormatBindings().size(); slot++) {
+                var format = pipeline.getVertexFormatBinding(slot); if (format == null) continue;
+                ImGui.text("Binding " + slot + ": stride " + format.getVertexSize() + ", instance step " + format.getStepRate());
+                for (var field : format.getElements()) ImGui.text("  " + field.name() + ": " + field.format() + " at " + field.offset());
+            }
         }
-    }
-
-    private String formatBuffer(String name, ByteBuffer buffer, ShaderUniformCache.Uniform uniform, int offset) {
-        return switch (uniform.type()) {
-            case GL_FLOAT ->
-                    this.formatFloats((uniform.offset() + offset) + ": float " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 1, 1);
-            case GL_FLOAT_VEC2 ->
-                    this.formatFloats((uniform.offset() + offset) + ": vec2 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 2, 1);
-            case GL_FLOAT_VEC3 ->
-                    this.formatFloats((uniform.offset() + offset) + ": vec3 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 3, 1);
-            case GL_FLOAT_VEC4 ->
-                    this.formatFloats((uniform.offset() + offset) + ": vec4 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 4, 1);
-            case GL_DOUBLE ->
-                    this.formatDoubles((uniform.offset() + offset) + ": double " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 1, 1);
-            case GL_DOUBLE_VEC2 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dvec2 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 2, 1);
-            case GL_DOUBLE_VEC3 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dvec3 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 3, 1);
-            case GL_DOUBLE_VEC4 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dvec4 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 4, 1);
-            case GL_INT ->
-                    this.formatInts((uniform.offset() + offset) + ": int " + name, i -> buffer.getInt(uniform.offset() + offset + (i << 2)), 1);
-            case GL_INT_VEC2 ->
-                    this.formatInts((uniform.offset() + offset) + ": ivec2 " + name, i -> buffer.getInt(uniform.offset() + offset + (i << 2)), 2);
-            case GL_INT_VEC3 ->
-                    this.formatInts((uniform.offset() + offset) + ": ivec3 " + name, i -> buffer.getInt(uniform.offset() + offset + (i << 2)), 3);
-            case GL_INT_VEC4 ->
-                    this.formatInts((uniform.offset() + offset) + ": ivec4 " + name, i -> buffer.getInt(uniform.offset() + offset + (i << 2)), 4);
-            case GL_UNSIGNED_INT ->
-                    this.formatUInts((uniform.offset() + offset) + ": uint " + name, i -> buffer.getInt(uniform.offset() + offset + (i << 2)), 1);
-            case GL_UNSIGNED_INT_VEC2 ->
-                    this.formatUInts((uniform.offset() + offset) + ": uvec2 " + name, i -> buffer.getInt(uniform.offset() + offset + (i << 2)), 2);
-            case GL_UNSIGNED_INT_VEC3 ->
-                    this.formatUInts((uniform.offset() + offset) + ": uvec3 " + name, i -> buffer.getInt(uniform.offset() + offset + (i << 2)), 3);
-            case GL_UNSIGNED_INT_VEC4 ->
-                    this.formatUInts((uniform.offset() + offset) + ": uvec4 " + name, i -> buffer.getInt(uniform.offset() + offset + (i << 2)), 4);
-            case GL_FLOAT_MAT2 ->
-                    this.formatFloats((uniform.offset() + offset) + ": mat2 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 2, 2);
-            case GL_FLOAT_MAT3 ->
-                    this.formatFloats((uniform.offset() + offset) + ": mat3 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 3, 3);
-            case GL_FLOAT_MAT4 ->
-                    this.formatFloats((uniform.offset() + offset) + ": mat4 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 4, 4);
-            case GL_FLOAT_MAT2x3 ->
-                    this.formatFloats((uniform.offset() + offset) + ": mat2x3 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 2, 3);
-            case GL_FLOAT_MAT2x4 ->
-                    this.formatFloats((uniform.offset() + offset) + ": mat2x4 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 2, 4);
-            case GL_FLOAT_MAT3x2 ->
-                    this.formatFloats((uniform.offset() + offset) + ": mat3x2 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 3, 2);
-            case GL_FLOAT_MAT3x4 ->
-                    this.formatFloats((uniform.offset() + offset) + ": mat3x4 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 3, 4);
-            case GL_FLOAT_MAT4x2 ->
-                    this.formatFloats((uniform.offset() + offset) + ": mat4x2 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 4, 2);
-            case GL_FLOAT_MAT4x3 ->
-                    this.formatFloats((uniform.offset() + offset) + ": mat4x3 " + name, i -> buffer.getFloat(uniform.offset() + offset + (i << 2)), 4, 3);
-            case GL_DOUBLE_MAT2 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dmat2 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 2, 2);
-            case GL_DOUBLE_MAT3 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dmat3 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 3, 3);
-            case GL_DOUBLE_MAT4 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dmat4 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 4, 4);
-            case GL_DOUBLE_MAT2x3 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dmat2x3 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 2, 3);
-            case GL_DOUBLE_MAT2x4 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dmat2x4 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 2, 4);
-            case GL_DOUBLE_MAT3x2 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dmat3x2 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 3, 2);
-            case GL_DOUBLE_MAT3x4 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dmat3x4 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 3, 4);
-            case GL_DOUBLE_MAT4x2 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dmat4x2 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 4, 2);
-            case GL_DOUBLE_MAT4x3 ->
-                    this.formatDoubles((uniform.offset() + offset) + ": dmat4x3 " + name, i -> buffer.getDouble(uniform.offset() + offset + (i << 3)), 4, 3);
-            default -> name;
-        };
-    }
-
-    private String formatUniformFloats(MemoryStack stack, String key, int program, int location, int cols, int rows) {
-        FloatBuffer values = stack.mallocFloat(rows * cols);
-        glGetUniformfv(program, location, values);
-        return this.formatFloats(key, values::get, cols, rows);
-    }
-
-    private String formatUniformDoubles(MemoryStack stack, String key, int program, int location, int cols, int rows) {
-        DoubleBuffer values = stack.mallocDouble(rows * cols);
-        glGetUniformdv(program, location, values);
-        return this.formatDoubles(key, values::get, cols, rows);
-    }
-
-    private String formatUniformInts(MemoryStack stack, String key, int program, int location, int cols) {
-        IntBuffer values = stack.mallocInt(cols);
-        glGetUniformiv(program, location, values);
-        return this.formatInts(key, values::get, cols);
-    }
-
-    private String formatUniformUInts(MemoryStack stack, String key, int program, int location, int cols) {
-        IntBuffer values = stack.mallocInt(cols);
-        glGetUniformuiv(program, location, values);
-        return this.formatUInts(key, values::get, cols);
-    }
-
-    private String formatFloats(String key, Function<Integer, Float> deserializer, int cols, int rows) {
-        StringBuilder matrix = new StringBuilder(key + ":" + (rows > 1 ? '\n' : ' '));
-
-        int[] colWidths = new int[cols];
-        for (int row = 0; row < rows; row++) {
-            for (int col = 0; col < cols; col++) {
-                int size = ("%+.4f").formatted(deserializer.apply(col * rows + row)).length();
-                if (size > colWidths[col]) {
-                    colWidths[col] = size;
+        if (ImGui.collapsingHeader("Shader sources and macros")) {
+            pipeline.getShaders().forEach((stage, id) -> ImGui.text(stage + ": " + id));
+            pipeline.getShaderDefines().values().forEach((name, value) -> ImGui.text(name + "=" + value));
+            pipeline.getShaderDefines().flags().forEach(ImGui::text);
+        }
+        GpuShaderProgram program = this.selectedProgram();
+        if (ImGui.collapsingHeader("Uniform bindings")) {
+            for (var uniform : BindGroupLayout.flattenUniforms(pipeline.getBindGroupLayouts())) {
+                ImGui.pushID(uniform.name());
+                if (ImGui.collapsingHeader(uniform.name() + ": " + uniform.type())) {
+                    if (program == null) ImGui.textWrapped("Native declaration. The draw owner has not supplied a CPU schema or current binding values.");
+                    else this.renderBinding(program, uniform.name(), uniform.type());
                 }
+                ImGui.popID();
             }
         }
-
-        for (int row = 0; row < rows; row++) {
-            matrix.append('[');
-            for (int col = 0; col < cols; col++) {
-                String value = ("%+" + colWidths[col] + ".4f").formatted(deserializer.apply(col * rows + row));
-                matrix.append(value).append(", ");
-            }
-            matrix.replace(matrix.length() - 2, matrix.length(), "]\n");
-        }
-        matrix.delete(matrix.length() - 1, matrix.length());
-        return matrix.toString();
-    }
-
-    private String formatDoubles(String key, Function<Integer, Double> deserializer, int cols, int rows) {
-        StringBuilder matrix = new StringBuilder(key + ":" + (rows > 1 ? '\n' : ' '));
-
-        int[] colWidths = new int[cols];
-        for (int row = 0; row < rows; row++) {
-            for (int col = 0; col < cols; col++) {
-                int size = ("%+.4f").formatted(deserializer.apply(col * rows + row)).length();
-                if (size > colWidths[col]) {
-                    colWidths[col] = size;
-                }
-            }
-        }
-
-        for (int row = 0; row < rows; row++) {
-            matrix.append('[');
-            for (int col = 0; col < cols; col++) {
-                String value = ("%+" + colWidths[col] + ".4f").formatted(deserializer.apply(col * rows + row));
-                matrix.append(value).append(", ");
-            }
-            matrix.replace(matrix.length() - 2, matrix.length(), "]\n");
-        }
-        matrix.delete(matrix.length() - 1, matrix.length());
-        return matrix.toString();
-    }
-
-    private String formatInts(String key, Function<Integer, Integer> deserializer, int cols) {
-        StringBuilder matrix = new StringBuilder(key + ": [");
-
-        int[] colWidths = new int[cols];
-        for (int col = 0; col < cols; col++) {
-            int size = ("%+d").formatted(deserializer.apply(col)).length();
-            if (size > colWidths[col]) {
-                colWidths[col] = size;
-            }
-        }
-
-        for (int col = 0; col < cols; col++) {
-            String value = ("%+" + colWidths[col] + "d").formatted(deserializer.apply(col));
-            matrix.append(value).append(", ");
-        }
-        matrix.replace(matrix.length() - 2, matrix.length(), "]");
-        return matrix.toString();
-    }
-
-    private String formatUInts(String key, Function<Integer, Integer> deserializer, int cols) {
-        StringBuilder matrix = new StringBuilder(key + ": [");
-
-        int[] colWidths = new int[cols];
-        for (int col = 0; col < cols; col++) {
-            int size = ("%+d").formatted(Integer.toUnsignedLong(deserializer.apply(col))).length();
-            if (size > colWidths[col]) {
-                colWidths[col] = size;
-            }
-        }
-
-        for (int col = 0; col < cols; col++) {
-            String value = ("%+" + colWidths[col] + "d").formatted(Integer.toUnsignedLong(deserializer.apply(col)));
-            matrix.append(value).append(", ");
-        }
-        matrix.replace(matrix.length() - 2, matrix.length(), "]");
-        return matrix.toString();
-    }
-
-    //</editor-fold>
-
-    private void openShaderButton(int type) {
-        boolean disabled = this.isShaderInvalid() || !this.selectedProgram.shaders.containsKey(type);
-        ImGui.beginDisabled(disabled);
-
-        if (disabled) {
-            ImGui.pushStyleColor(ImGuiCol.Button, ImGui.getColorU32(ImGuiCol.FrameBg));
-        }
-
-        ImGui.beginDisabled();
-        if (ImGui.button(DeviceInfoViewer.getShaderName(type).getString())) {
-            this.setEditShaderSource(this.selectedProgram.shaders.get(type));
-        }
-        if (ImGui.isItemHovered()) {
-            ImGui.beginTooltip();
-            ImGui.text("Text Editing is no longer supported in ImGui\nThis will be re-implemented in a future release");
-            ImGui.endTooltip();
-        }
-        ImGui.endDisabled();
-
-        if (disabled) {
-            ImGui.popStyleColor();
-        }
-
-        ImGui.endDisabled();
-    }
-
-    @Override
-    public void onShow() {
-        super.onShow();
-        this.reloadShaders();
-    }
-
-    @Override
-    public void onHide() {
-        super.onHide();
-        this.shaders.clear();
-    }
-
-    @Override
-    public void free() {
-        super.free();
-//        this.codeEditor.free();
-        if (this.selectedProgram != null) {
-            this.selectedProgram.free();
-            this.selectedProgram = null;
+        if (program != null && ImGui.collapsingHeader("Resource dependencies")) {
+            program.includedResources().stream().sorted(Comparator.comparing(Identifier::toString)).forEach(id -> ImGui.text("include " + id));
+            program.getDefinitionDependencies().stream().sorted().forEach(name -> ImGui.text("definition " + name));
         }
     }
-
-    @Override
-    public void onResourceManagerReload(@NotNull ResourceManager resourceManager) {
-        if (this.isOpen()) {
-            this.reloadShaders();
-        }
+    private void renderBinding(GpuShaderProgram program, String name, UniformType type) {
+        if (type == UniformType.COMBINED_IMAGE_SAMPLER) {
+            var binding = program.snapshotTextures().get(name);
+            if (binding == null) { ImGui.text("No current texture binding"); return; }
+            if (binding.view().isClosed() || binding.sampler().isClosed()) { ImGui.text("Texture/sampler retired"); return; }
+            ImGui.text(binding.view().getWidth(0) + " x " + binding.view().getHeight(0) + " " + binding.view().texture().getFormat());
+            ImGui.text("Mip " + binding.view().baseMipLevel() + ", levels " + binding.view().mipLevels());
+            ImGui.text("Min " + binding.sampler().getMinFilter() + ", mag " + binding.sampler().getMagFilter());
+            ImGui.text("Address " + binding.sampler().getAddressModeU() + ", " + binding.sampler().getAddressModeV());
+        } else if (type == UniformType.UNIFORM_BUFFER) {
+            GpuUniformBuffer block = program.getUniformBlock(name);
+            if (block == null) {
+                Long bytes = program.uniformBlockSizes().get(name);
+                ImGui.textWrapped(bytes == null ? "External buffer not currently bound; CPU schema unknown" : "Borrowed native range: " + bytes + " bytes; CPU schema unknown");
+                return;
+            }
+            ImGui.text(block.layout().size() + " bytes, std140. Values show the current CPU block.");
+            for (var field : block.layout().fields().values()) {
+                ImGui.text(field.type().glsl() + " " + field.name() + "; offset " + field.baseOffset() + ", stride " + field.stride());
+                int count = Math.max(1, field.arrayLength());
+                ImGuiListClipper.forEach(count, (int) ImGui.getTextLineHeightWithSpacing(), new ImListClipperCallback() {
+                    @Override public void accept(int element) { ImGui.text((field.arrayLength() > 0 ? "[" + element + "] " : "") + formatField(block, field, element)); }
+                });
+            }
+        } else ImGui.textWrapped("Typed native texel buffer; its owner must supply a schema for value inspection.");
     }
-
-    private record SelectedProgram(ResourceLocation name,
-                                   int programId,
-                                   Int2IntMap shaders,
-                                   ShaderUniformCache uniforms,
-                                   Int2ObjectMap<ByteBuffer> data) implements NativeResource {
-
-        public static SelectedProgram create(ResourceLocation name, int program) {
-            int[] attachedShaders = new int[glGetProgrami(program, GL_ATTACHED_SHADERS)];
-            glGetAttachedShaders(program, null, attachedShaders);
-
-            Int2IntMap shaders = new Int2IntArrayMap(attachedShaders.length);
-            for (int shader : attachedShaders) {
-                shaders.put(glGetShaderi(shader, GL_SHADER_TYPE), shader);
-            }
-
-            ShaderUniformCache cache = new ShaderUniformCache(() -> program);
-            Int2ObjectArrayMap<ByteBuffer> data = new Int2ObjectArrayMap<>(cache.getUniformBlocks().size());
-            return new SelectedProgram(name, program, Int2IntMaps.unmodifiable(shaders), cache, data);
-        }
-
-        public boolean isShaderInvalid() {
-            return this.programId == 0 || !glIsProgram(this.programId);
-        }
-
-        public void update() {
-            this.uniforms.clear();
-        }
-
-        @Override
-        public void free() {
-            this.uniforms.clear();
-        }
+    public static String formatField(GpuUniformBuffer block, GpuUniformBuffer.Field field, int element) {
+        if (!field.type().integer()) return Arrays.toString(block.getFloats(field.name(), element));
+        int[] values = block.getInts(field.name(), element);
+        if (!field.type().unsigned()) return Arrays.toString(values);
+        long[] unsigned = new long[values.length]; for (int index = 0; index < values.length; index++) unsigned[index] = Integer.toUnsignedLong(values[index]);
+        return Arrays.toString(unsigned);
     }
-
-    private enum TabSource {
-        VANILLA(Component.translatable("inspector.veil.shader.source.vanilla")) {
-            @Override
-            public void addShaders(ObjIntConsumer<ResourceLocation> registry) {
-                DebugGameRendererAccessor accessor = (DebugGameRendererAccessor) Minecraft.getInstance().gameRenderer;
-                Map<String, ShaderInstance> shaders = accessor.getShaders();
-                for (ShaderInstance shader : shaders.values()) {
-                    String name = shader.getName().isBlank() ? Integer.toString(shader.getId()) : shader.getName();
-                    registry.accept(ResourceLocation.parse(name), shader.getId());
-                }
-
-                ShaderInstance blitShader = accessor.getBlitShader();
-                registry.accept(ResourceLocation.parse(blitShader.getName()), blitShader.getId());
+    private void openSource(ShaderType stage, Identifier id) {
+        Runtime owner = runtime;
+        if (owner == null) { this.sourceText = new ImString("Resource manager has not been bound"); }
+        else try {
+            Identifier file = stage.idConverter().idToFile(id);
+            if (this.selectedProgram() != null) {
+                Identifier custom = Identifier.fromNamespaceAndPath(id.getNamespace(), owner.shaders.getSourceSet().getFolder() + "/" + id.getPath() + (stage == ShaderType.VERTEX ? ".vsh" : ".fsh"));
+                if (owner.resources.getResource(custom).isPresent()) file = custom;
             }
-        },
-        VANILLA_POST(Component.translatable("inspector.veil.shader.source.vanilla_post")) {
-            @Override
-            public void addShaders(ObjIntConsumer<ResourceLocation> registry) {
-                DebugLevelRendererAccessor levelRendererAccessor = (DebugLevelRendererAccessor) Minecraft.getInstance().levelRenderer;
-                this.addChainPasses(registry, levelRendererAccessor.getEntityEffect());
-                this.addChainPasses(registry, levelRendererAccessor.getTransparencyChain());
-                DebugGameRendererAccessor gameRendererAccessor = (DebugGameRendererAccessor) Minecraft.getInstance().gameRenderer;
-                this.addChainPasses(registry, gameRendererAccessor.getPostEffect());
-            }
-
-            private void addChainPasses(ObjIntConsumer<ResourceLocation> registry, @Nullable PostChain chain) {
-                if (chain == null) {
-                    return;
-                }
-
-                List<PostPass> passes = ((DebugPostChainAccessor) chain).getPasses();
-                for (PostPass pass : passes) {
-                    EffectInstance effect = pass.getEffect();
-                    registry.accept(ResourceLocation.parse(effect.getName()), effect.getId());
-                }
-            }
-        },
-        VEIL(Component.translatable("inspector.veil.shader.source.veil")) {
-            @Override
-            public void addShaders(ObjIntConsumer<ResourceLocation> registry) {
-                Map<ResourceLocation, ShaderProgram> shaders = VeilRenderSystem.renderer().getShaderManager().getShaders();
-                for (ShaderProgram shader : shaders.values()) {
-                    registry.accept(shader.getName(), shader.getProgram());
-                }
-            }
-        },
-        IRIS(Component.translatable("inspector.veil.shader.source.iris"), () -> IrisCompat.INSTANCE != null) {
-            @Override
-            public void addShaders(ObjIntConsumer<ResourceLocation> registry) {
-                for (ShaderInstance shader : IrisCompat.INSTANCE.getLoadedShaders()) {
-                    String name = shader.getName().isBlank() ? Integer.toString(shader.getId()) : shader.getName();
-                    registry.accept(ResourceLocation.parse(name), shader.getId());
-                }
-            }
-        },
-        SODIUM(Component.translatable("inspector.veil.shader.source.sodium"), () -> SodiumCompat.INSTANCE != null) {
-            @Override
-            public void addShaders(ObjIntConsumer<ResourceLocation> registry) {
-                for (Object2IntMap.Entry<ResourceLocation> entry : SodiumCompat.INSTANCE.getLoadedShaders().object2IntEntrySet()) {
-                    registry.accept(entry.getKey(), entry.getIntValue());
-                }
-            }
-        },
-        OTHER(Component.translatable("inspector.veil.shader.source.unknown")) {
-            @Override
-            public void addShaders(ObjIntConsumer<ResourceLocation> registry) {
-                IntSet programs = new IntOpenHashSet();
-                for (int i = 1; i < 10000; i++) {
-                    if (!glIsProgram(i)) {
-                        continue;
-                    }
-
-                    programs.add(i);
-                }
-
-                for (TabSource value : TabSource.values()) {
-                    if (value == this || !value.active.getAsBoolean()) {
-                        continue;
-                    }
-
-                    value.addShaders((name, id) -> programs.remove(id));
-                }
-
-                for (int program : programs) {
-                    registry.accept(ResourceLocation.fromNamespaceAndPath("unknown", Integer.toString(program)), program);
-                }
-            }
-        };
-
-        private final Component displayName;
-        private final BooleanSupplier active;
-
-        TabSource(Component displayName) {
-            this(displayName, () -> true);
-        }
-
-        TabSource(Component displayName, BooleanSupplier active) {
-            this.displayName = displayName;
-            this.active = active;
-        }
-
-        public abstract void addShaders(ObjIntConsumer<ResourceLocation> registry);
+            this.sourceText = new ImString(owner.resources.getResourceOrThrow(file).readAllAsString());
+        } catch (Exception failure) { this.sourceText = new ImString("Cannot read resource: " + failure.getMessage()); }
+        this.sourceTitle = stage + " " + id + "###native_shader_source"; this.sourceVisible.set(true);
     }
+    @Override public void onResourceManagerReload(ResourceManager resources) { this.refresh(); }
+    @Override public void free() { this.entries = List.of(); this.selected = null; this.sourceText.clear(); }
+    private record Runtime(ShaderManager shaders, ShaderPreDefinitions definitions, ResourceManager resources) { }
 }

@@ -1,4 +1,5 @@
 {
   "vertex": "veil:debug/shell",
-  "fragment": "veil:debug/shell"
+  "fragment": "veil:debug/shell",
+  "uniform_blocks": ["Projection", "DynamicTransforms"]
 }

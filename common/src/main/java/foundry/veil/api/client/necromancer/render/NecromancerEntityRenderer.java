@@ -5,13 +5,13 @@ import foundry.veil.api.client.necromancer.Skeleton;
 import foundry.veil.api.client.necromancer.SkeletonParent;
 import foundry.veil.api.client.necromancer.animation.Animator;
 import foundry.veil.api.client.render.MatrixStack;
-import foundry.veil.api.client.render.VeilRenderBridge;
 import foundry.veil.impl.client.necromancer.render.NecromancerRenderDispatcher;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
 
 import java.util.List;
@@ -22,7 +22,7 @@ import java.util.List;
  * @param <P> The entity to render
  * @param <S> The skeleton for the entity
  */
-public abstract class NecromancerEntityRenderer<P extends Entity & SkeletonParent<P, S>, S extends Skeleton> extends EntityRenderer<P> {
+public abstract class NecromancerEntityRenderer<P extends Entity & SkeletonParent<P, S>, S extends Skeleton> extends EntityRenderer<P, NecromancerEntityRenderState> {
 
     private final List<NecromancerEntityRenderLayer<P, S>> layers;
 
@@ -70,10 +70,20 @@ public abstract class NecromancerEntityRenderer<P extends Entity & SkeletonParen
     public abstract Animator<P, S> createAnimator(P parent, S skeleton);
 
     @Override
-    public void render(P parent, float entityYaw, float partialTick, PoseStack poseStack, MultiBufferSource bufferSource, int packedLight) {
-        NecromancerRenderer renderer = NecromancerRenderDispatcher.getRenderer();
-        this.render(parent, renderer, VeilRenderBridge.create(poseStack), packedLight, partialTick);
-        super.render(parent, entityYaw, partialTick, poseStack, renderer, packedLight);
+    public NecromancerEntityRenderState createRenderState() { return new NecromancerEntityRenderState(); }
+
+    @Override
+    public void extractRenderState(P parent, NecromancerEntityRenderState state, float partialTick) {
+        super.extractRenderState(parent, state, partialTick);
+        var recording = NecromancerRenderDispatcher.recording();
+        this.render(parent, recording, (MatrixStack) (Object) new PoseStack(), state.lightCoords, partialTick);
+        state.skeletalLayers = recording.snapshot();
+    }
+
+    @Override
+    public void submit(NecromancerEntityRenderState state, PoseStack poses, SubmitNodeCollector collector, CameraRenderState camera) {
+        for (var layer : state.skeletalLayers) layer.submit(collector, poses);
+        super.submit(state, poses, collector, camera);
     }
 
     /**
@@ -92,15 +102,11 @@ public abstract class NecromancerEntityRenderer<P extends Entity & SkeletonParen
         }
 
         matrixStack.matrixPush();
-        matrixStack.applyScale(0.0625F);
-        for (NecromancerEntityRenderLayer<P, S> layer : this.layers) {
-            layer.render(parent, skeleton, renderer, matrixStack, packedLight, partialTicks);
-        }
-        matrixStack.matrixPop();
-    }
-
-    @Override
-    public ResourceLocation getTextureLocation(P entity) {
-        throw new UnsupportedOperationException();
+        try {
+            matrixStack.applyScale(0.0625F);
+            for (NecromancerEntityRenderLayer<P, S> layer : this.layers) {
+                layer.render(parent, skeleton, renderer, matrixStack, packedLight, partialTicks);
+            }
+        } finally { matrixStack.matrixPop(); }
     }
 }

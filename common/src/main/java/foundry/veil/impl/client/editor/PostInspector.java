@@ -1,6 +1,5 @@
 package foundry.veil.impl.client.editor;
 
-import foundry.imgui.api.ImGuiMC;
 import foundry.veil.Veil;
 import foundry.veil.api.client.editor.SingleWindowInspector;
 import foundry.veil.api.client.imgui.VeilImGuiUtil;
@@ -10,7 +9,7 @@ import imgui.ImGui;
 import imgui.flag.ImGuiCond;
 import imgui.flag.ImGuiDragDropFlags;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.util.HashSet;
@@ -26,13 +25,13 @@ public class PostInspector extends SingleWindowInspector {
     private static final Component INACTIVE = Component.translatable("inspector.veil.post.inactive");
     private static final Component ACTIVE = Component.translatable("inspector.veil.post.active");
 
-    private final Set<ResourceLocation> removedPipelines;
+    private final Set<Identifier> removedPipelines;
 
     public PostInspector() {
         this.removedPipelines = new HashSet<>(1);
     }
 
-    public static boolean isInternal(ResourceLocation id) {
+    public static boolean isInternal(Identifier id) {
         return Veil.MODID.equals(id.getNamespace()) && id.getPath().startsWith("core/");
     }
 
@@ -51,9 +50,9 @@ public class PostInspector extends SingleWindowInspector {
 
         ImGui.setNextItemWidth(availableWidth / 2);
         ImGui.beginGroup();
-        ImGuiMC.component(INACTIVE);
+        VeilImGuiUtil.component(INACTIVE);
         if (ImGui.beginListBox("##available_pipelines", availableWidth / 2, 0)) {
-            for (ResourceLocation entry : postProcessingManager.getPipelines()) {
+            for (Identifier entry : postProcessingManager.getPipelines()) {
                 if (postProcessingManager.isActive(entry) || isInternal(entry)) {
                     continue;
                 }
@@ -72,7 +71,7 @@ public class PostInspector extends SingleWindowInspector {
         }
 
         if (ImGui.beginDragDropTarget()) {
-            ResourceLocation payload = ImGui.acceptDragDropPayload("ACTIVE_POST_PIPELINE");
+            Identifier payload = ImGui.acceptDragDropPayload("ACTIVE_POST_PIPELINE");
             if (payload != null) {
                 this.removedPipelines.add(payload);
             }
@@ -86,11 +85,11 @@ public class PostInspector extends SingleWindowInspector {
 
         ImGui.setNextItemWidth(availableWidth / 2);
         ImGui.beginGroup();
-        ImGuiMC.component(ACTIVE);
+        VeilImGuiUtil.component(ACTIVE);
 
         if (ImGui.beginListBox("##shaders", availableWidth / 2, 0)) {
             List<PostProcessingManager.ProfileEntry> pipelines = postProcessingManager.getActivePipelines();
-            ResourceLocation[] names = new ResourceLocation[pipelines.size()];
+            Identifier[] names = new Identifier[pipelines.size()];
 
             int i = 0;
             ListIterator<PostProcessingManager.ProfileEntry> iterator = pipelines.listIterator(pipelines.size());
@@ -99,7 +98,7 @@ public class PostInspector extends SingleWindowInspector {
             }
 
             for (int j = 0; j < names.length; j++) {
-                ResourceLocation id = names[j];
+                Identifier id = names[j];
 
                 ImGui.pushID(id.toString());
                 VeilImGuiUtil.resourceLocation(id);
@@ -111,7 +110,7 @@ public class PostInspector extends SingleWindowInspector {
                 }
 
                 if (ImGui.beginDragDropTarget()) {
-                    ResourceLocation payload = ImGui.acceptDragDropPayload("ACTIVE_POST_PIPELINE");
+                    Identifier payload = ImGui.acceptDragDropPayload("ACTIVE_POST_PIPELINE");
                     if (payload != null) {
                         int oldIndex;
                         for (oldIndex = 0; oldIndex < names.length; oldIndex++) {
@@ -141,7 +140,7 @@ public class PostInspector extends SingleWindowInspector {
         }
 
         if (ImGui.beginDragDropTarget()) {
-            ResourceLocation payload = ImGui.acceptDragDropPayload("INACTIVE_POST_PIPELINE");
+            Identifier payload = ImGui.acceptDragDropPayload("INACTIVE_POST_PIPELINE");
             if (payload != null) {
                 postProcessingManager.add(1000, payload);
             }
@@ -150,7 +149,7 @@ public class PostInspector extends SingleWindowInspector {
         }
         ImGui.endGroup();
 
-        for (ResourceLocation id : this.removedPipelines) {
+        for (Identifier id : this.removedPipelines) {
             postProcessingManager.remove(id);
         }
     }

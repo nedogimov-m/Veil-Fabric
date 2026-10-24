@@ -4,7 +4,6 @@ import foundry.veil.api.client.color.Colorc;
 import foundry.veil.api.client.editor.EditorAttributeProvider;
 import foundry.veil.api.client.registry.LightTypeRegistry;
 import foundry.veil.api.client.render.CullFrustum;
-import foundry.veil.api.client.render.light.DDALightData;
 import imgui.ImGui;
 import net.minecraft.client.Camera;
 import org.joml.Vector3f;
@@ -15,14 +14,12 @@ import org.joml.Vector3fc;
  *
  * @since 2.0.0
  */
-public class DirectionalLightData extends LightData implements EditorAttributeProvider, DDALightData {
+public class DirectionalLightData extends LightData implements EditorAttributeProvider {
 
     protected final Vector3f direction;
-    protected boolean occlusionEnabled;
 
     public DirectionalLightData() {
         this.direction = new Vector3f(0.0F, -1.0F, 0.0F);
-        this.occlusionEnabled = false;
     }
 
     /**
@@ -95,15 +92,6 @@ public class DirectionalLightData extends LightData implements EditorAttributePr
         return this;
     }
 
-    /**
-     * @since 4.4.0
-     */
-    public DirectionalLightData setOcclusionEnabled(boolean occlusionEnabled) {
-        this.occlusionEnabled = occlusionEnabled;
-        this.markDirty();
-        return this;
-    }
-
     @Override
     public boolean isVisible(CullFrustum frustum) {
         return true;
@@ -111,7 +99,7 @@ public class DirectionalLightData extends LightData implements EditorAttributePr
 
     @Override
     public DirectionalLightData setTo(Camera camera) {
-        this.direction.set(camera.getLookVector());
+        this.direction.set(camera.forwardVector());
         return this;
     }
 
@@ -129,14 +117,5 @@ public class DirectionalLightData extends LightData implements EditorAttributePr
         }
         ImGui.sameLine(0, ImGui.getStyle().getItemInnerSpacingX());
         ImGui.text("direction");
-
-        if (ImGui.checkbox("Occluded", this.occlusionEnabled)) {
-            this.setOcclusionEnabled(!this.occlusionEnabled);
-        }
-    }
-
-    @Override
-    public boolean isOcclusionEnabled() {
-        return this.occlusionEnabled;
     }
 }

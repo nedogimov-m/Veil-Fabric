@@ -1,28 +1,16 @@
 package foundry.veil.api.client.necromancer.render;
 
-import com.mojang.blaze3d.shaders.Uniform;
-import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import foundry.veil.api.client.necromancer.Skeleton;
 import foundry.veil.api.client.render.MatrixStack;
-import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.rendertype.VeilRenderType;
-import foundry.veil.api.client.render.shader.block.DynamicShaderBlock;
-import foundry.veil.api.client.render.vertex.VertexArray;
-import foundry.veil.api.client.render.vertex.VertexArrayBuilder;
-import it.unimi.dsi.fastutil.floats.FloatList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntList;
-import it.unimi.dsi.fastutil.objects.Object2IntArrayMap;
-import it.unimi.dsi.fastutil.objects.Object2IntMap;
-import it.unimi.dsi.fastutil.objects.Object2IntMaps;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.client.renderer.ShaderInstance;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.util.Mth;
-import org.jetbrains.annotations.ApiStatus;
 import org.joml.*;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.NativeResource;
@@ -31,180 +19,82 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.lwjgl.opengl.ARBDirectStateAccess.glNamedBufferSubData;
-import static org.lwjgl.opengl.GL15C.glBindBuffer;
-import static org.lwjgl.opengl.GL15C.glBufferSubData;
-import static org.lwjgl.opengl.GL30C.glUniform1ui;
-import static org.lwjgl.opengl.GL31C.GL_UNIFORM_BUFFER;
-
-public class Skin implements NativeResource {
-
-    private final VertexArray vertexArray;
-    private final Object2IntMap<String> boneIds;
-    private final Vector4f color;
-
-    private int instances;
-
-    private final Matrix3f normalMatrix;
-    private Matrix4x3f[] matrixStack;
-    private Quaternionf[] orientationStack;
-
-    public Skin(VertexArray vertexArray, Object2IntMap<String> boneIds) {
-        this.vertexArray = vertexArray;
-        this.boneIds = boneIds;
-        this.color = new Vector4f();
-
-        this.normalMatrix = new Matrix3f();
-        this.matrixStack = null;
-        this.orientationStack = null;
+/** CPU mesh ownership with immutable deformed native feature snapshots. GPU feature staging belongs to Minecraft. */
+public final class Skin implements NativeResource {
+    private final List<Vertex> vertices;
+    private final int[] indices;
+    private final List<String> boneNames;
+    private boolean retired;
+    private record Vertex(float x, float y, float z, float u, float v, float nx, float ny, float nz, int bone) {}
+    public record DeformedVertex(float x, float y, float z, float u, float v, float nx, float ny, float nz, int color, int overlay, int light) {}
+    private Skin(List<Vertex> vertices, int[] indices, List<String> bones) {
+        this.vertices = List.copyOf(vertices); this.indices = indices.clone(); this.boneNames = List.copyOf(bones);
     }
-
-    @ApiStatus.Internal
-    public void render(RenderType renderType, List<Matrix4x3f> transforms, List<Skeleton> skeletons, int instancedBuffer, ByteBufferBuilder boneBuilder, int boneBuffer, DynamicShaderBlock<?> boneBlock, FloatList partialTicks) {
-        if (skeletons.isEmpty()) {
-            return;
+    public int getSkeletonDataSize() { return this.boneNames.size(); }
+    /** Serialize the live hierarchy/interpolated pose now; submitted geometry never reads the mutable skeleton or source skin. */
+    public Snapshot snapshot(Skeleton skeleton, Matrix4fc transform, Vector4fc tint, int overlay, int light, float partial) {
+        if (this.retired) throw new IllegalStateException("Skin is retired");
+        Matrix4x3f[] matrices = new Matrix4x3f[this.boneNames.size()];
+        Matrix3f[] normals = new Matrix3f[this.boneNames.size()];
+        Vector4f[] colors = new Vector4f[this.boneNames.size()];
+        for (int i = 0; i < this.boneNames.size(); i++) {
+            var bone = skeleton.bones.get(this.boneNames.get(i));
+            if (bone == null) throw new IllegalArgumentException("Skin references a missing skeleton bone: " + this.boneNames.get(i));
+            matrices[i] = bone.getModelTransform(new Matrix4x3f().set(transform), new Quaternionf(), partial);
+            normals[i] = matrices[i].normal(new Matrix3f());
+            colors[i] = new Vector4f(); bone.getColor(colors[i], partial); colors[i].mul(tint);
         }
-
-        if (this.instances != skeletons.size()) {
-            VertexArrayBuilder format = this.vertexArray.editFormat();
-            // The instanced buffer has to be redefined each time it changes size, so re-attach it
-            format.defineVertexBuffer(1, instancedBuffer, 0, 8, 1);
-            if (this.instances == 0) {
-                format.setVertexIAttribute(4, 1, 1, VertexArrayBuilder.DataType.UNSIGNED_BYTE, 0); // Overlay Coordinates
-                format.setVertexIAttribute(5, 1, 1, VertexArrayBuilder.DataType.UNSIGNED_BYTE, 1); // Lightmap Coordinates
-                format.setVertexAttribute(6, 1, 4, VertexArrayBuilder.DataType.UNSIGNED_BYTE, true, 2); // Color
-            }
-            this.instances = skeletons.size();
+        List<DeformedVertex> output = new ArrayList<>(this.vertices.size());
+        for (Vertex vertex : this.vertices) {
+            var position = matrices[vertex.bone].transformPosition(new Vector3f(vertex.x, vertex.y, vertex.z));
+            var normal = normals[vertex.bone].transform(vertex.nx, vertex.ny, vertex.nz, new Vector3f());
+            if (normal.lengthSquared() > 0) normal.normalize();
+            var color = colors[vertex.bone];
+            int packed = channel(color.w) << 24 | channel(color.x) << 16 | channel(color.y) << 8 | channel(color.z);
+            output.add(new DeformedVertex(position.x, position.y, position.z, vertex.u, vertex.v, normal.x, normal.y, normal.z, packed, overlay, light));
         }
-
-        Skeleton first = skeletons.getFirst();
-        int maxDepth = first.getMaxDepth();
-        if (this.matrixStack == null || this.matrixStack.length < maxDepth) {
-            this.matrixStack = new Matrix4x3f[maxDepth];
-            this.orientationStack = new Quaternionf[maxDepth];
-            for (int i = 0; i < maxDepth; i++) {
-                this.matrixStack[i] = new Matrix4x3f();
-                this.orientationStack[i] = new Quaternionf();
-            }
-        }
-
-        // Store bone data in buffer
-        int skeletonDataSize = Skeleton.UNIFORM_STRIDE * this.getSkeletonDataSize();
-        int size = skeletonDataSize * skeletons.size();
-        ByteBuffer buffer = MemoryUtil.memByteBuffer(boneBuilder.reserve(size), size);
-
-        for (int i = 0; i < skeletons.size(); i++) {
-            Skeleton skeleton = skeletons.get(i);
-            for (int j = 0; j < maxDepth; j++) {
-                this.matrixStack[j].identity();
-            }
-            buffer.position(i * skeletonDataSize);
-            skeleton.storeInstancedData(
-                    buffer,
-                    skeleton.roots,
-                    this.boneIds,
-                    0,
-                    this.color,
-                    this.normalMatrix,
-                    transforms.get(i),
-                    this.matrixStack,
-                    this.orientationStack,
-                    partialTicks.getFloat(i)
-            );
-        }
-
-        buffer.rewind();
-        ByteBufferBuilder.Result result = boneBuilder.build();
-        if (result != null) {
-            result.close();
-        }
-
-        // Upload data
-        if (VeilRenderSystem.directStateAccessSupported()) {
-            glNamedBufferSubData(boneBuffer, 0, buffer);
-        } else {
-            glBindBuffer(GL_UNIFORM_BUFFER, boneBuffer);
-            glBufferSubData(GL_UNIFORM_BUFFER, 0, buffer);
-        }
-
-        // Draw
-        this.vertexArray.bind();
-        VeilRenderSystem.bind("NecromancerBones", boneBlock);
-
-        // TODO query uniform block size
-        renderType.setupRenderState();
-        this.render();
-        renderType.clearRenderState();
-
-        if (renderType instanceof VeilRenderType.LayeredRenderType layeredRenderType) {
-            for (RenderType layer : layeredRenderType.getLayers()) {
-                layer.setupRenderState();
-                this.render();
-                layer.clearRenderState();
-            }
-        }
-
-        VeilRenderSystem.unbind(boneBlock);
+        return new Snapshot(output, this.indices);
     }
-
-    private void render() {
-        ShaderInstance shader = RenderSystem.getShader();
-        if (shader != null) {
-            shader.setDefaultUniforms(VertexFormat.Mode.TRIANGLES, RenderSystem.getModelViewMatrix(), RenderSystem.getProjectionMatrix(), Minecraft.getInstance().getWindow());
-            shader.apply();
-
-            Uniform uniform = shader.getUniform("NecromancerBoneCount");
-            if (uniform != null) {
-                glUniform1ui(uniform.getLocation(), this.boneIds.size());
-            }
+    private static int channel(float value) { return java.lang.Math.round(Mth.clamp(value, 0, 1) * 255); }
+    public static final class Snapshot {
+        private final List<DeformedVertex> vertices;
+        private final int[] indices;
+        private Snapshot(List<DeformedVertex> vertices, int[] indices) { this.vertices = List.copyOf(vertices); this.indices = indices.clone(); }
+        public List<DeformedVertex> vertices() { return this.vertices; }
+        public int[] indices() { return this.indices.clone(); }
+        public void submit(SubmitNodeCollector collector, PoseStack poses, RenderType type) {
+            var topology = type.primitiveTopology();
+            if (topology != PrimitiveTopology.QUADS && topology != PrimitiveTopology.TRIANGLES)
+                throw new IllegalArgumentException("Skinned triangle meshes require a native triangle or quad render type");
+            collector.submitCustomGeometry(poses, type, (pose, output) -> {
+                for (int i = 0; i < this.indices.length; i += 3) {
+                    this.emit(pose, output, type, this.indices[i]); this.emit(pose, output, type, this.indices[i + 1]); this.emit(pose, output, type, this.indices[i + 2]);
+                    // A degenerate fourth vertex lets native quad staging carry any indexed triangle without changing its winding.
+                    if (topology == PrimitiveTopology.QUADS) this.emit(pose, output, type, this.indices[i + 2]);
+                }
+            });
         }
-
-        this.vertexArray.drawInstanced(this.instances);
-
-        if (shader != null) {
-            shader.clear();
+        private void emit(PoseStack.Pose pose, VertexConsumer output, RenderType type, int index) {
+            DeformedVertex v = this.vertices.get(index);
+            output.addVertex(pose, v.x, v.y, v.z);
+            var format = type.format();
+            if (format.contains("Color")) output.setColor(v.color);
+            if (format.contains("UV0")) output.setUv(v.u, v.v);
+            if (format.contains("UV1")) output.setOverlay(v.overlay);
+            if (format.contains("UV2")) output.setLight(v.light);
+            if (format.contains("Normal")) output.setNormal(pose, v.nx, v.ny, v.nz);
         }
     }
-
-    public VertexArray getVertexArray() {
-        return this.vertexArray;
-    }
-
-    public int getSkeletonDataSize() {
-        return this.boneIds.size();
-    }
-
-    public static VertexArray createVertexArray() {
-        RenderSystem.assertOnRenderThreadOrInit();
-        VertexArray vertexArray = VertexArray.create();
-
-        int vbo = vertexArray.getOrCreateBuffer(VertexArray.VERTEX_BUFFER);
-        VertexArrayBuilder format = vertexArray.editFormat();
-        format.defineVertexBuffer(0, vbo, 0, 24, 0);
-
-        format.setVertexAttribute(0, 0, 3, VertexArrayBuilder.DataType.FLOAT, false, 0); // Position
-        format.setVertexAttribute(1, 0, 2, VertexArrayBuilder.DataType.FLOAT, false, 12); // UV
-        format.setVertexAttribute(2, 0, 3, VertexArrayBuilder.DataType.BYTE, true, 20); // Normal
-        format.setVertexIAttribute(3, 0, 1, VertexArrayBuilder.DataType.UNSIGNED_BYTE, 23); // Bone Index
-
-        VertexArray.unbind();
-        return vertexArray;
-    }
-
-    @Override
-    public void free() {
-        this.vertexArray.free();
-    }
-
+    @Override public void free() { this.retired = true; }
     public static Builder builder(int textureWidth, int textureHeight) {
+        if (textureWidth <= 0 || textureHeight <= 0) throw new IllegalArgumentException("Skin texture dimensions must be positive");
         return new Builder(textureWidth, textureHeight);
     }
 
     public static class Builder {
-        private static final Vector3f POS = new Vector3f();
-        private static final Vector3f NORMAL = new Vector3f();
+        private final Vector3f POS = new Vector3f();
+        private final Vector3f NORMAL = new Vector3f();
 
-        private final VertexArray vertexArray;
         private final ByteBufferBuilder vertices;
         private final IntList indices;
         private final List<String> boneNames;
@@ -216,7 +106,6 @@ public class Skin implements NativeResource {
         private int nextIndex;
 
         private Builder(float textureWidth, float textureHeight) {
-            this.vertexArray = createVertexArray();
             this.vertices = new ByteBufferBuilder(Skeleton.MAX_BONES * 24 * 24);
             this.indices = new IntArrayList();
             this.boneNames = new ArrayList<>();
@@ -411,7 +300,6 @@ public class Skin implements NativeResource {
                 float x2, float y2, float z2, float u2, float v2,
                 float x3, float y3, float z3, float u3, float v3,
                 float normalX, float normalY, float normalZ) {
-            this.vertices.reserve(72);
             this.addVertex(x1, y1, z1, u1, v1, normalX, normalY, normalZ);
             this.addVertex(x2, y2, z2, u2, v2, normalX, normalY, normalZ);
             this.addVertex(x3, y3, z3, u3, v3, normalX, normalY, normalZ);
@@ -427,7 +315,6 @@ public class Skin implements NativeResource {
                 float x3, float y3, float z3, float u3, float v3,
                 float x4, float y4, float z4, float u4, float v4,
                 float normalX, float normalY, float normalZ) {
-            this.vertices.reserve(96);
             this.addVertex(x1, y1, z1, u1, v1, normalX, normalY, normalZ);
             this.addVertex(x2, y2, z2, u2, v2, normalX, normalY, normalZ);
             this.addVertex(x3, y3, z3, u3, v3, normalX, normalY, normalZ);
@@ -440,40 +327,20 @@ public class Skin implements NativeResource {
             return this.nextIndex;
         }
 
-        private void storeIndices(VertexArray.IndexType indexType, ByteBuffer buffer) {
-            for (int i = 0; i < this.indices.size(); i++) {
-                int index = this.indices.getInt(i);
-                switch (indexType) {
-                    case BYTE -> buffer.put(i, (byte) index);
-                    case SHORT -> buffer.putShort(i * 2, (short) index);
-                    case INT -> buffer.putInt(i * 4, index);
-                }
-            }
-        }
-
         public Skin build() {
-            ByteBuffer indices = null;
             try (this.vertices; ByteBufferBuilder.Result result = this.vertices.build()) {
-                if (result == null) {
-                    throw new IllegalStateException("No mesh data provides to skin");
+                if (result == null) throw new IllegalStateException("No mesh data provided to skin");
+                ByteBuffer bytes = result.byteBuffer().order(java.nio.ByteOrder.nativeOrder());
+                List<Vertex> mesh = new ArrayList<>();
+                for (int offset = 0; offset < bytes.remaining(); offset += 24) {
+                    mesh.add(new Vertex(bytes.getFloat(offset), bytes.getFloat(offset + 4), bytes.getFloat(offset + 8),
+                            bytes.getFloat(offset + 12), bytes.getFloat(offset + 16), bytes.get(offset + 20) / 127f,
+                            bytes.get(offset + 21) / 127f, bytes.get(offset + 22) / 127f, bytes.get(offset + 23) & 255));
                 }
-                int vertexBuffer = this.vertexArray.getOrCreateBuffer(VertexArray.VERTEX_BUFFER);
-                VertexArray.upload(vertexBuffer, result.byteBuffer(), VertexArray.DrawUsage.STATIC);
-
-                // Allocate and store index buffer
-                VertexArray.IndexType indexType = VertexArray.IndexType.least(this.nextIndex - 1);
-                indices = MemoryUtil.memAlloc(this.indices.size() << indexType.ordinal());
-                this.storeIndices(indexType, indices);
-                this.vertexArray.uploadIndexBuffer(indices, indexType);
-
-                Object2IntMap<String> boneIds = new Object2IntArrayMap<>(this.boneNames.size());
-                for (int i = 0; i < this.boneNames.size(); i++) {
-                    boneIds.put(this.boneNames.get(i), i);
-                }
-
-                return new Skin(this.vertexArray, Object2IntMaps.unmodifiable(boneIds));
-            } finally {
-                MemoryUtil.memFree(indices);
+                int[] triangles = this.indices.toIntArray();
+                if (triangles.length % 3 != 0) throw new IllegalStateException("Skin index count must contain complete triangles");
+                for (int index : triangles) if (index < 0 || index >= mesh.size()) throw new IllegalArgumentException("Skin index outside mesh: " + index);
+                return new Skin(mesh, triangles, this.boneNames);
             }
         }
     }

@@ -95,5 +95,5 @@
       "name": "final"
     }
   },
-  "renderStage": "after_block_entities"
+  "renderStage": "end_main"
 }

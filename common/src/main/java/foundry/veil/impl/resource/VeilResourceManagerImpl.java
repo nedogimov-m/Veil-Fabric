@@ -14,7 +14,7 @@ import foundry.veil.ext.PackResourcesExtension;
 import foundry.veil.impl.resource.loader.*;
 import it.unimi.dsi.fastutil.objects.*;
 import net.minecraft.client.Minecraft;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.*;
@@ -71,7 +71,6 @@ public class VeilResourceManagerImpl implements VeilResourceManager, NativeResou
         this.addLoader(new BlockModelResourceLoader());
         this.addLoader(new ShellResourceLoader());
         this.addLoader(new FlareResourcesLoader());
-        this.addLoader(new QuasarResourceLoader());
     }
 
     /**
@@ -124,7 +123,7 @@ public class VeilResourceManagerImpl implements VeilResourceManager, NativeResou
         }
     }
 
-    private VeilResource<?> visitResource(@Nullable PackType packType, ResourceProvider provider, ResourceLocation loc, @Nullable Path path, @Nullable Path modResourcePath) throws IOException {
+    private VeilResource<?> visitResource(@Nullable PackType packType, ResourceProvider provider, Identifier loc, @Nullable Path path, @Nullable Path modResourcePath) throws IOException {
         for (VeilResourceLoader loader : this.loaders) {
             if (loader.canLoad(packType, loc, path, modResourcePath)) {
                 return loader.load(this, provider, packType, loc, path, modResourcePath);
@@ -143,8 +142,8 @@ public class VeilResourceManagerImpl implements VeilResourceManager, NativeResou
     public PreparableReloadListener createReloadListener() {
         return CompositeReloadListener.of(new PreparableReloadListener() {
             @Override
-            public CompletableFuture<Void> reload(PreparationBarrier preparationBarrier, ResourceManager resourceManager, ProfilerFiller prepareProfiler, ProfilerFiller applyProfiler, Executor backgroundExecutor, Executor gameExecutor) {
-                return VeilResourceManagerImpl.this.reloadClient(preparationBarrier, resourceManager, prepareProfiler, applyProfiler, backgroundExecutor, gameExecutor);
+            public CompletableFuture<Void> reload(SharedState state, Executor backgroundExecutor, PreparationBarrier preparationBarrier, Executor gameExecutor) {
+                return VeilResourceManagerImpl.this.reloadClient(preparationBarrier, state.resourceManager(), backgroundExecutor, gameExecutor);
             }
 
             @Override
@@ -153,8 +152,8 @@ public class VeilResourceManagerImpl implements VeilResourceManager, NativeResou
             }
         }, new PreparableReloadListener() {
             @Override
-            public CompletableFuture<Void> reload(PreparationBarrier preparationBarrier, ResourceManager resourceManager, ProfilerFiller prepareProfiler, ProfilerFiller applyProfiler, Executor backgroundExecutor, Executor gameExecutor) {
-                return VeilResourceManagerImpl.this.reloadServer(preparationBarrier, resourceManager, prepareProfiler, applyProfiler, backgroundExecutor, gameExecutor);
+            public CompletableFuture<Void> reload(SharedState state, Executor backgroundExecutor, PreparationBarrier preparationBarrier, Executor gameExecutor) {
+                return VeilResourceManagerImpl.this.reloadServer(preparationBarrier, state.resourceManager(), backgroundExecutor, gameExecutor);
             }
 
             @Override
@@ -164,7 +163,7 @@ public class VeilResourceManagerImpl implements VeilResourceManager, NativeResou
         });
     }
 
-    private CompletableFuture<Void> reloadClient(PreparableReloadListener.PreparationBarrier preparationBarrier, ResourceManager resourceManager, ProfilerFiller preparationsProfiler, ProfilerFiller reloadProfiler, Executor backgroundExecutor, Executor gameExecutor) {
+    private CompletableFuture<Void> reloadClient(PreparableReloadListener.PreparationBarrier preparationBarrier, ResourceManager resourceManager, Executor backgroundExecutor, Executor gameExecutor) {
         return CompletableFuture.supplyAsync(() -> {
             List<VeilPackResources> packs = new LinkedList<>();
             Object2ObjectMap<Path, PackResourceListener> watchers = new Object2ObjectArrayMap<>();
@@ -198,7 +197,7 @@ public class VeilResourceManagerImpl implements VeilResourceManager, NativeResou
         }, gameExecutor);
     }
 
-    private CompletableFuture<Void> reloadServer(PreparableReloadListener.PreparationBarrier preparationBarrier, ResourceManager resourceManager, ProfilerFiller preparationsProfiler, ProfilerFiller reloadProfiler, Executor backgroundExecutor, Executor gameExecutor) {
+    private CompletableFuture<Void> reloadServer(PreparableReloadListener.PreparationBarrier preparationBarrier, ResourceManager resourceManager, Executor backgroundExecutor, Executor gameExecutor) {
         return CompletableFuture.supplyAsync(() -> this.serverResourceManager = new MultiPackResourceManager(PackType.SERVER_DATA, resourceManager.listPacks().toList()), backgroundExecutor)
                 .thenCompose(preparationBarrier::wait)
                 .thenAcceptAsync(serverResourceManager -> this.serverResourceManager = serverResourceManager, gameExecutor);

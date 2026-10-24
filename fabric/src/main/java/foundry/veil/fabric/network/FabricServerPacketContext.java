@@ -2,7 +2,7 @@ package foundry.veil.fabric.network;
 
 import foundry.veil.api.network.handler.ServerPacketContext;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.network.PacketSendListener;
+import io.netty.channel.ChannelFutureListener;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -25,7 +25,7 @@ public record FabricServerPacketContext(ServerPlayNetworking.Context context) im
     }
 
     @Override
-    public void sendPacket(Packet<?> packet, @Nullable PacketSendListener callback) {
+    public void sendPacket(Packet<?> packet, @Nullable ChannelFutureListener callback) {
         this.context.responseSender().sendPacket(packet, callback);
     }
 

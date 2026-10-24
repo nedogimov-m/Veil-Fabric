@@ -33,6 +33,9 @@ public interface VeilEventPlatform {
 
     void onVeilRenderLevelStage(VeilRenderLevelStageEvent event);
 
+    /** Runs after default stage listeners, including listeners registered after this final callback. */
+    void onVeilRenderLevelStageFinal(VeilRenderLevelStageEvent event);
+
     void onVeilShaderCompile(VeilShaderCompileEvent event);
 
     void onVeilDynamicBuffersChanged(VeilDynamicBuffersChangedEvent event);

@@ -1,4 +1,10 @@
 {
   "vertex": "veil:blit_screen",
-  "fragment": "veil:core/unblur"
+  "fragment": "veil:core/unblur",
+  "textures": {
+    "DiffuseSampler0": {
+      "type": "framebuffer",
+      "name": "minecraft:main"
+    }
+  }
 }

@@ -1,7 +1,6 @@
 package foundry.veil.api.client.render.shader;
 
 import com.mojang.serialization.Codec;
-import foundry.veil.api.client.render.VeilRenderSystem;
 import foundry.veil.api.util.EnumCodec;
 import io.github.ocelot.glslprocessor.api.node.GlslTree;
 import org.jetbrains.annotations.ApiStatus;
@@ -58,17 +57,10 @@ public enum ShaderFeature {
      * @return Whether this feature is supported on this platform
      */
     public boolean isSupported() {
-        return switch (this) {
-            case COMPUTE -> VeilRenderSystem.computeSupported();
-            case SHADER_STORAGE -> VeilRenderSystem.shaderStorageBufferSupported();
-            case ATOMIC_COUNTER -> VeilRenderSystem.atomicCounterSupported();
-            case BINDLESS_TEXTURE -> VeilRenderSystem.bindlessTextureSupported();
-            case CUBE_MAP_ARRAY -> VeilRenderSystem.textureCubeMapArraySupported();
-            case FLOAT64 -> VeilRenderSystem.gpuShaderFloat64BitSupported();
-            case INT64 -> VeilRenderSystem.gpuShaderInt64BitSupported();
-            case VERTEX_ATTRIBUTE64 -> VeilRenderSystem.vertexAttribute64BitSupported();
-            case TESSELLATION -> VeilRenderSystem.tessellationSupported();
-        };
+        // RenderPearl 26.3 exposes vertex/fragment pipelines, UBOs and typed
+        // texel buffers. These legacy GL extensions require explicit algorithm
+        // migrations; advertising them as supported would compile unusable shaders.
+        return false;
     }
 
     /**

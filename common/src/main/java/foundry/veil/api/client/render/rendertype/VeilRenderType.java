@@ -1,441 +1,151 @@
 package foundry.veil.api.client.render.rendertype;
 
-import com.mojang.blaze3d.platform.GlStateManager;
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.MeshData;
-import com.mojang.blaze3d.vertex.VertexFormat;
-import foundry.veil.Veil;
-import foundry.veil.api.client.render.VeilRenderBridge;
-import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.vertex.VeilVertexFormat;
-import foundry.veil.api.event.VeilRegisterFixedBuffersEvent;
-import foundry.veil.impl.client.render.pipeline.CullFaceShard;
-import foundry.veil.impl.client.render.rendertype.WhiteTextureStateShard;
-import foundry.veil.mixin.rendertype.accessor.RenderStateShardAccessor;
+import com.mojang.renderpearl.api.pipeline.BlendFactor;
+import com.mojang.renderpearl.api.pipeline.BlendFunction;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
+import foundry.veil.api.client.render.framebuffer.FramebufferManager;
+import foundry.veil.api.client.registry.RenderTypeShardRegistry;
+import foundry.veil.api.client.render.shader.ShaderManager;
+import foundry.veil.api.event.VeilRenderLevelStageEvent;
+import foundry.veil.impl.client.render.rendertype.DynamicRenderTypeManager;
+import foundry.veil.impl.client.render.rendertype.NativeRenderTypeDraws;
+import foundry.veil.impl.client.render.pipeline.VeilShaderBlockState;
 import foundry.veil.mixin.rendertype.accessor.RenderTypeAccessor;
-import net.minecraft.Util;
-import net.minecraft.client.renderer.RenderStateShard;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.client.renderer.ShaderInstance;
-import net.minecraft.resources.ResourceLocation;
-import org.jetbrains.annotations.Contract;
-import org.jetbrains.annotations.NotNull;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.rendertype.PreparedRenderType;
+import net.minecraft.client.renderer.rendertype.RenderSetup;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
-import org.joml.Matrix4f;
 
 import java.util.*;
-import java.util.function.BiFunction;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import java.util.concurrent.Executor;
 
-import static org.lwjgl.opengl.GL11C.*;
+/** Actual native RenderSetup/pipeline types, reloadable wrappers and same-buffer layer execution. */
+public final class VeilRenderType {
+    private static volatile DynamicRenderTypeManager manager;
+    private static final Map<ParticleKey, RenderType> PARTICLES = new HashMap<>();
+    private static final Map<ParticleKey, RenderType> TRAILS = new HashMap<>();
+    private static final Identifier WHITE = Identifier.fromNamespaceAndPath("veil", "textures/special/white.png");
 
-/**
- * Custom Veil-implemented render types.
- */
-public final class VeilRenderType extends RenderType {
-
-    public static final RenderStateShard.DepthTestStateShard NEVER_DEPTH_TEST = new RenderStateShard.DepthTestStateShard("never", GL_NEVER);
-    public static final RenderStateShard.DepthTestStateShard LESS_DEPTH_TEST = new RenderStateShard.DepthTestStateShard("<", GL_LESS);
-    public static final RenderStateShard.DepthTestStateShard NOTEQUAL_DEPTH_TEST = new RenderStateShard.DepthTestStateShard("<", GL_NOTEQUAL);
-    public static final RenderStateShard.DepthTestStateShard GEQUAL_DEPTH_TEST = new RenderStateShard.DepthTestStateShard(">=", GL_GEQUAL);
-
-    public static final RenderStateShard CULL_FRONT = new CullFaceShard(GL_FRONT);
-    public static final RenderStateShard CULL_BACK = new CullFaceShard(GL_BACK);
-    public static final RenderStateShard CULL_FRONT_AND_BACK = new CullFaceShard(GL_FRONT_AND_BACK);
-    public static final RenderStateShard.WriteMaskStateShard NO_WRITE = new RenderStateShard.WriteMaskStateShard(false, false);
-    public static final RenderStateShard.EmptyTextureStateShard WHITE_TEXTURE = new WhiteTextureStateShard();
-
-    private static final EnumMap<GlStateManager.LogicOp, ColorLogicStateShard> COLOR_LOGIC_SHARDS = new EnumMap<>(GlStateManager.LogicOp.class);
-
-    static {
-        for (GlStateManager.LogicOp logicOp : GlStateManager.LogicOp.values()) {
-            COLOR_LOGIC_SHARDS.put(logicOp, new ColorLogicStateShard(logicOp.name().toLowerCase(Locale.ROOT), () -> {
-                RenderSystem.enableColorLogicOp();
-                RenderSystem.logicOp(logicOp);
-            }, RenderSystem::disableColorLogicOp));
-        }
+    public static RenderType create(String name, VertexFormat format, PrimitiveTopology topology, int bufferSize,
+                                     boolean affectsCrumbling, boolean sort, boolean outline, VeilRenderTypeBuilder.State state) {
+        final var pipeline = VeilRenderTypeBuilder.pipeline(Identifier.fromNamespaceAndPath("veil", "dynamic/" + Integer.toUnsignedString(name.hashCode(), 16)),
+                state, format, topology, List.of(com.mojang.renderpearl.api.pipeline.ColorTargetState.DEFAULT.format()),
+                com.mojang.renderpearl.api.GpuFormat.D32_FLOAT);
+        final var setup = VeilRenderTypeBuilder.setup(pipeline, state, affectsCrumbling, sort, outline);
+        final var type = RenderTypeShardRegistry.constructing(() -> RenderTypeAccessor.veil$create(name, setup));
+        NativeRenderTypeDraws.register(type, state, bufferSize);
+        RenderTypeShardRegistry.created(type);
+        return type;
     }
-
-    private static final ShaderStateShard PARTICLE = VeilRenderBridge.shaderState(Veil.veilPath("quasar/particle"));
-
-    private static final BiFunction<ResourceLocation, Boolean, RenderType> QUASAR_PARTICLE = Util.memoize((texture, additive) -> {
-        CompositeState state = RenderType.CompositeState.builder()
-                .setShaderState(PARTICLE)
-                .setTextureState(new TextureStateShard(texture, false, false))
-                .setTransparencyState(additive ? ADDITIVE_TRANSPARENCY : TRANSLUCENT_TRANSPARENCY)
-                .setLightmapState(LIGHTMAP)
-                .setWriteMaskState(COLOR_DEPTH_WRITE)
-                .createCompositeState(false);
-        return create(Veil.MODID + ":quasar_particle", VeilVertexFormat.QUASAR_PARTICLE, VertexFormat.Mode.QUADS, SMALL_BUFFER_SIZE, false, true, state);
-    });
-    private static final BiFunction<ResourceLocation, Boolean, RenderType> QUASAR_TRAIL = Util.memoize((texture, additive) -> {
-        CompositeState state = CompositeState.builder()
-                .setShaderState(RENDERTYPE_ENTITY_TRANSLUCENT_EMISSIVE_SHADER)
-                .setTextureState(new TextureStateShard(texture, false, false))
-                .setTransparencyState(additive ? ADDITIVE_TRANSPARENCY : TRANSLUCENT_TRANSPARENCY)
-                .setWriteMaskState(COLOR_DEPTH_WRITE)
-                .setCullState(NO_CULL)
-                .createCompositeState(false);
-        return RenderType.create(Veil.MODID + ":quasar_trail", DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.TRIANGLE_STRIP, TRANSIENT_BUFFER_SIZE, false, false, state);
-    });
-    private static final Function<Boolean, RenderType> NO_TEXTURE_QUASAR_TRAIL = Util.memoize((additive) -> {
-        CompositeState state = CompositeState.builder()
-                .setShaderState(RENDERTYPE_ENTITY_TRANSLUCENT_EMISSIVE_SHADER)
-                .setTextureState(WHITE_TEXTURE)
-                .setTransparencyState(additive ? ADDITIVE_TRANSPARENCY : TRANSLUCENT_TRANSPARENCY)
-                .setWriteMaskState(COLOR_DEPTH_WRITE)
-                .setCullState(NO_CULL)
-                .createCompositeState(false);
-        return RenderType.create(Veil.MODID + ":quasar_trail", DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.TRIANGLE_STRIP, TRANSIENT_BUFFER_SIZE, false, false, state);
-    }) ;
-
-    public static RenderType quasarParticle(ResourceLocation texture, boolean additive) {
-        return QUASAR_PARTICLE.apply(texture, additive);
+    public static void setDynamicManager(DynamicRenderTypeManager manager) { VeilRenderType.manager = Objects.requireNonNull(manager); }
+    public static void bindRuntime(ShaderManager shaders, FramebufferManager framebuffers, Executor workers) {
+        NativeRenderTypeDraws.bindRuntime(shaders, framebuffers, workers);
     }
-
-    public static RenderType quasarTrail(@Nullable ResourceLocation texture) {
-        return quasarTrail(texture, true);
+    public static void bindUniformBlocks(VeilShaderBlockState blocks) { NativeRenderTypeDraws.bindUniformBlocks(blocks); }
+    public static void unbindRuntime() { NativeRenderTypeDraws.unbindRuntime(); }
+    /** The owner invokes this at END_MAIN, after vanilla has closed its active render passes. */
+    public static void drawPending(VeilRenderLevelStageEvent.Stage stage, VeilRenderLevelStageEvent.Context context) {
+        NativeRenderTypeDraws.drawPending(stage, context);
     }
-
-    public static RenderType quasarTrail(@Nullable ResourceLocation texture, boolean additive) {
-        return texture != null ? QUASAR_TRAIL.apply(texture, additive) : NO_TEXTURE_QUASAR_TRAIL.apply(additive);
+    public static @Nullable RenderType get(Identifier id, Object... params) {
+        final var owner = manager;
+        return owner != null ? owner.get(id, params) : null;
     }
-
-    public static TransparencyStateShard noTransparencyShard() {
-        return RenderStateShard.NO_TRANSPARENCY;
+    public static RenderTypeWrapper getWrapper(Identifier id) { return new RenderTypeWrapper(id); }
+    public static String getName(RenderType type) { return ((RenderTypeAccessor) (Object) type).veil$getName(); }
+    public static String getName(@Nullable Identifier target) { return target == null ? "current_target" : target.toString(); }
+    public static VeilRenderTypeAccessor getShards(RenderType type) {
+        final var setup = ((RenderTypeAccessor) (Object) type).veil$getState();
+        final var state = NativeRenderTypeDraws.state(type);
+        return new VeilRenderTypeAccessor() {
+            @Override public RenderSetup renderSetup() { return setup; }
+            @Override public com.mojang.renderpearl.api.pipeline.RenderPipeline pipeline() { return type.pipeline(); }
+            @Override public Identifier veilShaderId() { return state != null ? state.veilShader() : null; }
+            @Override public Identifier outputState() { return state != null ? state.output() : null; }
+        };
     }
-
-    public static TransparencyStateShard additiveTransparencyShard() {
-        return RenderStateShard.ADDITIVE_TRANSPARENCY;
-    }
-
-    public static TransparencyStateShard lightningTransparencyShard() {
-        return RenderStateShard.LIGHTNING_TRANSPARENCY;
-    }
-
-    public static TransparencyStateShard glintTransparencyShard() {
-        return RenderStateShard.GLINT_TRANSPARENCY;
-    }
-
-    public static TransparencyStateShard crumblingTransparencyShard() {
-        return RenderStateShard.CRUMBLING_TRANSPARENCY;
-    }
-
-    public static TransparencyStateShard translucentTransparencyShard() {
-        return RenderStateShard.TRANSLUCENT_TRANSPARENCY;
-    }
-
-    public static DepthTestStateShard noDepthTestShard() {
-        return RenderStateShard.NO_DEPTH_TEST;
-    }
-
-    public static DepthTestStateShard equalDepthTestShard() {
-        return RenderStateShard.EQUAL_DEPTH_TEST;
-    }
-
-    public static DepthTestStateShard lequalDepthTestShard() {
-        return RenderStateShard.LEQUAL_DEPTH_TEST;
-    }
-
-    public static DepthTestStateShard greaterDepthTestShard() {
-        return RenderStateShard.GREATER_DEPTH_TEST;
-    }
-
-    public static CullStateShard cullShard() {
-        return RenderStateShard.CULL;
-    }
-
-    public static CullStateShard noCullShard() {
-        return RenderStateShard.NO_CULL;
-    }
-
-    public static LightmapStateShard lightmap() {
-        return RenderStateShard.LIGHTMAP;
-    }
-
-    public static LightmapStateShard noLightmap() {
-        return RenderStateShard.NO_LIGHTMAP;
-    }
-
-    public static OverlayStateShard overlay() {
-        return RenderStateShard.OVERLAY;
-    }
-
-    public static OverlayStateShard noOverlay() {
-        return RenderStateShard.NO_OVERLAY;
-    }
-
-    public static LayeringStateShard noLayering() {
-        return RenderStateShard.NO_LAYERING;
-    }
-
-    public static LayeringStateShard polygonOffsetLayering() {
-        return RenderStateShard.POLYGON_OFFSET_LAYERING;
-    }
-
-    public static LayeringStateShard viewOffsetLayering() {
-        return RenderStateShard.VIEW_OFFSET_Z_LAYERING;
-    }
-
-    public static WriteMaskStateShard colorDepthWriteShard() {
-        return RenderStateShard.COLOR_DEPTH_WRITE;
-    }
-
-    public static WriteMaskStateShard colorWriteShard() {
-        return RenderStateShard.COLOR_WRITE;
-    }
-
-    public static WriteMaskStateShard depthWriteShard() {
-        return RenderStateShard.DEPTH_WRITE;
-    }
-
-    public static ColorLogicStateShard colorLogicStateShard(GlStateManager.LogicOp op) {
-        return COLOR_LOGIC_SHARDS.get(op);
-    }
-
-    /**
-     * Retrieves and caches a render type with the specified id.
-     *
-     * @param id     The id of the render type to get
-     * @param params Additional parameters to configure the render type
-     * @return The render type created or <code>null</code> if unregistered or an error occurs
-     */
-    @Contract(pure = true)
-    public static @Nullable RenderType get(ResourceLocation id, Object... params) {
-        return VeilRenderSystem.renderer().getDynamicRenderTypeManager().get(id, params);
-    }
-
-    /**
-     * Creates a new wrapper pointing to a.
-     *
-     * @param id The id of the render type to wrap
-     * @return A wrapper render type that points to the specified dynamic render type
-     * @since 2.0.0
-     */
-    @Contract(value = "_->new", pure = true)
-    public static RenderTypeWrapper getWrapper(ResourceLocation id) {
-        return new RenderTypeWrapper(id);
-    }
-
-    /**
-     * Retrieves the name of the specified render shard.
-     *
-     * @param shard The render shard to get the name of
-     * @return The name of the render type to get
-     */
-    @Contract(pure = true)
-    public static String getName(RenderStateShard shard) {
-        return ((RenderStateShardAccessor) shard).getName();
-    }
-
-    @Contract(pure = true)
-    public static VeilRenderTypeAccessor getShards(RenderType renderType) {
-        if (!(renderType instanceof CompositeRenderType compositeRenderType)) {
-            throw new IllegalArgumentException("Expected composite render type to be an instance of " + CompositeRenderType.class.getName() + ", but was " + renderType.getClass());
-        }
-        return (VeilRenderTypeAccessor) (Object) compositeRenderType.state();
-    }
-
-    /**
-     * Creates a render type that uses a single draw buffer, but re-uses the data to draw the specified layers.
-     *
-     * @param layers The layers to use
-     * @return A render type that draws all layers from a single buffer
-     * @throws IllegalStateException If there are zero layers, the vertex formats don't all match, or the primitive modes don't match
-     */
-    @Contract(pure = true)
     public static RenderType layered(RenderType... layers) {
-        if (layers.length == 0) {
-            throw new IllegalArgumentException("At least 1 render type must be specified");
+        if (layers.length == 0) throw new IllegalArgumentException("At least one render type must be specified");
+        if (layers.length == 1) return layers[0];
+        for (RenderType type : layers) {
+            if (!layers[0].format().equals(type.format())) throw new IllegalArgumentException("Layer vertex formats differ");
+            if (layers[0].primitiveTopology() != type.primitiveTopology()) throw new IllegalArgumentException("Layer primitive topologies differ");
         }
-        if (layers.length == 1) {
-            return layers[0];
-        }
-
-        RenderType[] array = new RenderType[layers.length - 1];
-        VertexFormat format = layers[0].format();
-        VertexFormat.Mode mode = layers[0].mode();
-        int bufferSize = layers[0].bufferSize();
-        boolean sortOnUpload = ((RenderTypeAccessor) layers[0]).isSortOnUpload();
-
-        for (int i = 1; i < layers.length; i++) {
-            RenderType layer = layers[i];
-            if (!layer.format().equals(format)) {
-                throw new IllegalArgumentException("Expected " + layer + " to use " + format + ", but was " + layer.format());
-            }
-            if (!layer.mode().equals(mode)) {
-                throw new IllegalArgumentException("Expected " + layer + " to use " + mode + ", but was " + layer.mode());
-            }
-            bufferSize = Math.max(bufferSize, layer.bufferSize());
-            if (((RenderTypeAccessor) layer).isSortOnUpload()) {
-                sortOnUpload = true;
-            }
-            array[i - 1] = layer;
-        }
-        return new LayeredRenderType(layers[0], array, "LayeredRenderType[" + Arrays.stream(layers).map(VeilRenderType::getName).collect(Collectors.joining(", ")) + "]", bufferSize, sortOnUpload);
+        return new LayeredRenderType(layers);
     }
-
-    /**
-     * Layers multiple render types on top of each other to re-use the same mesh data when rendering.
-     * <br>
-     * Essentially, this acts as "render passes" for a render type.
-     */
-    public static class LayeredRenderType extends RenderType {
-
-        private final RenderType[] layers;
-
-        private LayeredRenderType(RenderType defaultValue, RenderType[] layers, String name, int bufferSize, boolean sortOnUpload) {
-            super(name, defaultValue.format(), defaultValue.mode(), bufferSize, defaultValue.affectsCrumbling(), sortOnUpload, defaultValue::setupRenderState, defaultValue::clearRenderState);
-            this.layers = layers;
-        }
-
-        @Override
-        public void draw(@NotNull MeshData meshData) {
-            super.draw(meshData);
-            if (BufferUploader.lastImmediateBuffer != null) {
-
-                Matrix4f modelViewMatrix = RenderSystem.getModelViewMatrix();
-                Matrix4f projectionMatrix = RenderSystem.getProjectionMatrix();
-                for (RenderType layer : this.layers) {
-                    layer.setupRenderState();
-
-                    ShaderInstance shader = RenderSystem.getShader();
-                    if (shader != null) {
-                        BufferUploader.lastImmediateBuffer.drawWithShader(modelViewMatrix, projectionMatrix, shader);
-                    }
-
-                    layer.clearRenderState();
-                }
-            }
-        }
-
-        /**
-         * @return All additional render layers this render type should render
-         */
-        public RenderType[] getLayers() {
-            return this.layers;
-        }
+    public static void release(RenderType type) {
+        if (type instanceof LayeredRenderType layered) for (RenderType layer : layered.allLayers) release(layer);
+        NativeRenderTypeDraws.release(type);
     }
-
-    /**
-     * Wraps a Veil dynamic render type with a static render type. Useful for {@link net.neoforged.neoforge.client.event.RegisterNamedRenderTypesEvent} or {@link VeilRegisterFixedBuffersEvent}.
-     *
-     * @since 2.0.0
-     */
-    public static class RenderTypeWrapper extends RenderType {
-
-        private static final Object[] NO_PARAMS = new Object[0];
-
-        private final ResourceLocation id;
-        private Object[] params;
-
-        private RenderTypeWrapper(ResourceLocation id) {
-            super(id.toString(), DefaultVertexFormat.POSITION, VertexFormat.Mode.QUADS, 0, false, false, () -> {
-            }, () -> {
-            });
-            this.id = id;
-            this.params = NO_PARAMS;
-        }
-
-        @Override
-        public void setupRenderState() {
-            RenderType renderType = this.get();
-            if (renderType != null) {
-                renderType.setupRenderState();
-            }
-        }
-
-        @Override
-        public void clearRenderState() {
-            RenderType renderType = this.get();
-            if (renderType != null) {
-                renderType.clearRenderState();
-            }
-        }
-
-        @Override
-        public void draw(@NotNull MeshData meshData) {
-            RenderType renderType = this.get();
-            if (renderType != null) {
-                renderType.draw(meshData);
-            }
-        }
-
-        @Override
-        public int bufferSize() {
-            RenderType renderType = this.get();
-            return renderType != null ? renderType.bufferSize() : TRANSIENT_BUFFER_SIZE;
-        }
-
-        @Override
-        public @NotNull VertexFormat format() {
-            RenderType renderType = this.get();
-            return renderType != null ? renderType.format() : DefaultVertexFormat.POSITION;
-        }
-
-        @Override
-        public VertexFormat.@NotNull Mode mode() {
-            RenderType renderType = this.get();
-            return renderType != null ? renderType.mode() : VertexFormat.Mode.QUADS;
-        }
-
-        @Override
-        public @NotNull Optional<RenderType> outline() {
-            RenderType renderType = this.get();
-            return renderType != null ? renderType.outline() : Optional.empty();
-        }
-
-        @Override
-        public boolean isOutline() {
-            RenderType renderType = this.get();
-            return renderType != null && renderType.isOutline();
-        }
-
-        @Override
-        public boolean affectsCrumbling() {
-            RenderType renderType = this.get();
-            return renderType != null && renderType.affectsCrumbling();
-        }
-
-        @Override
-        public boolean canConsolidateConsecutiveGeometry() {
-            RenderType renderType = this.get();
-            return renderType != null && renderType.canConsolidateConsecutiveGeometry();
-        }
-
-        @Override
-        public boolean sortOnUpload() {
-            RenderType renderType = this.get();
-            return renderType != null && renderType.sortOnUpload();
-        }
-
-        /**
-         * Sets the parameters to pass to the render type.
-         *
-         * @param params The new parameters
-         */
-        public void setParams(Object... params) {
-            if (params.length == 0) {
-                this.params = NO_PARAMS;
-            } else if (this.params.length == params.length) {
-                System.arraycopy(params, 0, this.params, 0, params.length);
-            } else {
-                this.params = Arrays.copyOf(params, params.length);
-            }
-        }
-
-        /**
-         * @return The dynamic render type instance or <code>null</code> if it failed to load
-         */
-        public @Nullable RenderType get() {
-            return VeilRenderSystem.renderer().getDynamicRenderTypeManager().get(this.id, this.params);
-        }
+    public static synchronized RenderType quasarParticle(Identifier texture, boolean additive) {
+        return PARTICLES.computeIfAbsent(new ParticleKey(texture, additive), key -> create("veil:quasar_particle/" + key,
+                foundry.veil.api.client.render.vertex.VeilVertexFormat.QUASAR_PARTICLE, PrimitiveTopology.QUADS,
+                RenderType.SMALL_BUFFER_SIZE, false, true, false,
+                new VeilRenderTypeBuilder().shaderState(Identifier.fromNamespaceAndPath("veil", "quasar/particle"), true)
+                        .textureState(List.of(new VeilRenderTypeBuilder.Texture(texture, false, false)))
+                        .transparencyState(Optional.of(additive ? new BlendFunction(BlendFactor.ONE, BlendFactor.ONE) : BlendFunction.TRANSLUCENT))
+                        .lightmapState(true).create()));
     }
-
-    private VeilRenderType(String name, VertexFormat format, VertexFormat.Mode mode, int bufferSize, boolean affectsCrumbling, boolean sortOnUpload, Runnable setupState, Runnable clearState) {
-        super(name, format, mode, bufferSize, affectsCrumbling, sortOnUpload, setupState, clearState);
+    public static RenderType quasarTrail(@Nullable Identifier texture) { return quasarTrail(texture, true); }
+    public static synchronized RenderType quasarTrail(@Nullable Identifier texture, boolean additive) {
+        return TRAILS.computeIfAbsent(new ParticleKey(texture, additive), key -> create("veil:quasar_trail/" + key,
+                DefaultVertexFormat.ENTITY, PrimitiveTopology.TRIANGLE_STRIP, RenderType.TRANSIENT_BUFFER_SIZE,
+                false, false, false, new VeilRenderTypeBuilder()
+                        .shaderState(Identifier.withDefaultNamespace("rendertype_entity_translucent_emissive"), false)
+                        .textureState(List.of(new VeilRenderTypeBuilder.Texture(texture == null ? WHITE : texture, false, false)))
+                        .transparencyState(Optional.of(additive ? new BlendFunction(BlendFactor.ONE, BlendFactor.ONE) : BlendFunction.TRANSLUCENT))
+                        .cullState(foundry.veil.api.client.render.rendertype.layer.CullLayer.CullFace.NONE).create()));
     }
+    private record ParticleKey(@Nullable Identifier texture, boolean additive) {}
+
+    public static final class LayeredRenderType extends RenderType {
+        private final RenderType[] allLayers;
+        private LayeredRenderType(RenderType[] layers) {
+            super("Veil layered " + Arrays.toString(layers), ((RenderTypeAccessor) (Object) layers[0]).veil$getState());
+            this.allLayers = layers.clone();
+        }
+        @Override public PreparedRenderType prepare() {
+            final var prepared = Arrays.stream(this.allLayers).map(RenderType::prepare).toList();
+            // Legacy layered types define ordered blending. Disable the first native type's OIT
+            // multipass container so every layer reuses the staged geometry exactly once.
+            final var first = prepared.getFirst();
+            final var combined = new PreparedRenderType(first.name(), first.pipeline(), null, first.dynamicTransforms(), first.scissorState(), first.textures());
+            NativeRenderTypeDraws.layered(combined, prepared);
+            return combined;
+        }
+        @Override public boolean sortOnUpload() { return Arrays.stream(this.allLayers).anyMatch(RenderType::sortOnUpload); }
+        public RenderType[] getLayers() { return Arrays.copyOfRange(this.allLayers, 1, this.allLayers.length); }
+        public RenderType[] getAllLayers() { return this.allLayers.clone(); }
+    }
+    public static final class RenderTypeWrapper extends RenderType {
+        private final Identifier id;
+        private Object[] params = new Object[0];
+        private RenderTypeWrapper(Identifier id) {
+            super(id.toString(), RenderSetup.builder(RenderPipelines.DEBUG_QUADS).createRenderSetup());
+            this.id = Objects.requireNonNull(id);
+        }
+        public void setParams(Object... params) { this.params = params.clone(); }
+        public @Nullable RenderType get() { return VeilRenderType.get(this.id, this.params); }
+        private RenderType require() {
+            final var type = this.get();
+            if (type == null) throw new IllegalStateException("Dynamic render type could not be resolved: " + this.id);
+            return type;
+        }
+        @Override public PreparedRenderType prepare() { return require().prepare(); }
+        @Override public VertexFormat format() { return require().format(); }
+        @Override public PrimitiveTopology primitiveTopology() { return require().primitiveTopology(); }
+        @Override public com.mojang.renderpearl.api.pipeline.RenderPipeline pipeline() { return require().pipeline(); }
+        @Override public Optional<RenderType> outline() { return require().outline(); }
+        @Override public boolean isOutline() { return require().isOutline(); }
+        @Override public boolean affectsCrumbling() { return require().affectsCrumbling(); }
+        @Override public boolean sortOnUpload() { return require().sortOnUpload(); }
+        @Override public boolean canConsolidateConsecutiveGeometry() { return require().canConsolidateConsecutiveGeometry(); }
+        @Override public boolean hasBlending() { return require().hasBlending(); }
+        @Override public boolean forceSolidModelPhase() { return require().forceSolidModelPhase(); }
+    }
+    private VeilRenderType() {}
 }

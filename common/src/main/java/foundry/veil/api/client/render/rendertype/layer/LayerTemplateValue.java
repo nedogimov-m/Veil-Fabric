@@ -2,8 +2,8 @@ package foundry.veil.api.client.render.rendertype.layer;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
-import net.minecraft.ResourceLocationException;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.IdentifierException;
+import net.minecraft.resources.Identifier;
 
 import java.util.Arrays;
 import java.util.IllegalFormatException;
@@ -26,12 +26,12 @@ public sealed interface LayerTemplateValue<T> {
                 return new RawValue<>(name, name);
             }, LayerTemplateValue::rawValue);
 
-    Codec<LayerTemplateValue<ResourceLocation>> LOCATION_CODEC = Codec.STRING
+    Codec<LayerTemplateValue<Identifier>> LOCATION_CODEC = Codec.STRING
             .flatXmap(name -> {
                 if (name.contains("%")) {
-                    return DataResult.success(new FormattedValue<>(name, ResourceLocation::parse));
+                    return DataResult.success(new FormattedValue<>(name, Identifier::parse));
                 }
-                return ResourceLocation.read(name).map(loc -> new RawValue<>(loc.toString(), loc));
+                return Identifier.read(name).map(loc -> new RawValue<>(loc.toString(), loc));
             }, value -> DataResult.success(value.rawValue()));
 
     /**
@@ -45,9 +45,9 @@ public sealed interface LayerTemplateValue<T> {
      * @param params The provided parameters for formatting
      * @return The value of this template
      * @throws IllegalFormatException    If the formatting string provided is invalid for the parameters
-     * @throws ResourceLocationException If the value is a resource location and is not valid
+     * @throws IdentifierException If the value is a resource location and is not valid
      */
-    T parse(Object... params) throws IllegalFormatException, ResourceLocationException;
+    T parse(Object... params) throws IllegalFormatException, IdentifierException;
 
     /**
      * Creates a codec for the specified enum values.

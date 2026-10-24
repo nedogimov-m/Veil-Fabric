@@ -2,7 +2,7 @@ package foundry.veil.api.client.render.shader;
 
 import foundry.veil.impl.client.render.shader.injection.ShaderInjectionManager;
 import io.github.ocelot.glslprocessor.api.node.GlslTree;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimplePreparableReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
@@ -16,7 +16,7 @@ import org.jetbrains.annotations.NotNull;
 @Deprecated(forRemoval = true)
 public class ShaderModificationManager extends SimplePreparableReloadListener<ShaderModificationManager.Preparations> {
 
-    public void applyModifiers(ResourceLocation shaderId, GlslTree tree, int flags) {
+    public void applyModifiers(Identifier shaderId, GlslTree tree, int flags) {
     }
 
     @Override

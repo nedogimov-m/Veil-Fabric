@@ -1,7 +1,7 @@
 package foundry.veil.impl.client.render.shader.injection.util;
 
 import com.google.gson.*;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
@@ -16,11 +16,11 @@ import java.util.List;
  */
 @ApiStatus.Internal
 public record ShaderInjectionDefinition(
-        @Nullable ResourceLocation id,
-        List<ResourceLocation> targets,
-        List<ResourceLocation> redirects,
+        @Nullable Identifier id,
+        List<Identifier> targets,
+        List<Identifier> redirects,
         int priority,
-        @Nullable ResourceLocation replace,
+        @Nullable Identifier replace,
         boolean debug) {
 
     public static final int DEFAULT_PRIORITY = 1000;
@@ -35,13 +35,13 @@ public record ShaderInjectionDefinition(
 
     public static Gson createGson() {
         return new GsonBuilder()
-                .registerTypeAdapter(ResourceLocation.class, (JsonDeserializer<ResourceLocation>) (json, type, context) -> ResourceLocation.parse(json.getAsString()))
-                .registerTypeAdapter(ResourceLocation.class, (JsonSerializer<ResourceLocation>) (location, type, context) -> context.serialize(location.toString()))
+                .registerTypeAdapter(Identifier.class, (JsonDeserializer<Identifier>) (json, type, context) -> Identifier.parse(json.getAsString()))
+                .registerTypeAdapter(Identifier.class, (JsonSerializer<Identifier>) (location, type, context) -> context.serialize(location.toString()))
                 .registerTypeAdapter(ShaderInjectionDefinition.class, new Deserializer())
                 .create();
     }
 
-    public ShaderInjectionDefinition withDefaultId(ResourceLocation defaultId) {
+    public ShaderInjectionDefinition withDefaultId(Identifier defaultId) {
         return new ShaderInjectionDefinition(
                 this.id != null ? this.id : defaultId,
                 this.targets,
@@ -52,7 +52,7 @@ public record ShaderInjectionDefinition(
         );
     }
 
-    public @Nullable ResourceLocation target() {
+    public @Nullable Identifier target() {
         return this.targets.isEmpty() ? null : this.targets.getFirst();
     }
 
@@ -62,28 +62,28 @@ public record ShaderInjectionDefinition(
         public ShaderInjectionDefinition deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
             JsonObject obj = json.getAsJsonObject();
 
-            List<ResourceLocation> targets = parseResourceLocations(obj, "target");
-            List<ResourceLocation> redirects = parseResourceLocations(obj, "redirect");
+            List<Identifier> targets = parseIdentifiers(obj, "target");
+            List<Identifier> redirects = parseIdentifiers(obj, "redirect");
             int priority = obj.has("priority") ? obj.get("priority").getAsInt() : DEFAULT_PRIORITY;
-            ResourceLocation replace = obj.has("replace") ? context.deserialize(obj.get("replace"), ResourceLocation.class) : null;
+            Identifier replace = obj.has("replace") ? context.deserialize(obj.get("replace"), Identifier.class) : null;
             boolean debug = obj.has("debug") && obj.get("debug").getAsBoolean();
 
             return new ShaderInjectionDefinition(null, targets, redirects, priority, replace, debug);
         }
     }
 
-    private static List<ResourceLocation> parseResourceLocations(JsonObject obj, String field) {
+    private static List<Identifier> parseIdentifiers(JsonObject obj, String field) {
         if (!obj.has(field) || obj.get(field) instanceof JsonNull) {
             return List.of();
         }
         JsonElement element = obj.get(field);
         if (element instanceof JsonArray array) {
-            List<ResourceLocation> result = new ArrayList<>();
+            List<Identifier> result = new ArrayList<>();
             for (JsonElement el : array) {
-                result.add(ResourceLocation.parse(el.getAsString()));
+                result.add(Identifier.parse(el.getAsString()));
             }
             return result;
         }
-        return List.of(ResourceLocation.parse(element.getAsString()));
+        return List.of(Identifier.parse(element.getAsString()));
     }
 }

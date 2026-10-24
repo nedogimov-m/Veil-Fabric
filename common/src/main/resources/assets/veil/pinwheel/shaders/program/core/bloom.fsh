@@ -1,13 +1,16 @@
-#include veil:color_utilities
+#version 330
+#extension GL_ARB_separate_shader_objects : require
+
+#include <veil:color_utilities>
 #define SMOOTHING 0.3
 
 uniform sampler2D DiffuseSampler0;
 uniform sampler2D BloomSampler;
 uniform sampler2D BlurFinal;
 
-in vec2 texCoord;
+layout(location=0) in vec2 texCoord;
 
-out vec4 fragColor;
+layout(location=0) out vec4 fragColor;
 
 void main() {
     fragColor = texture(DiffuseSampler0, texCoord);

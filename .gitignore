@@ -23,3 +23,23 @@ eclipse
 run
 runs
 logs
+
+# Downloaded original artifacts and diagnostic output
+.upstream-cache/
+local-maven/**/*.jar
+*.log
+
+# Local reports, runtime state and generated compile-only API artifacts
+/dist
+/diagnostics/
+/port-tests/.gradle/
+.upstream-cache/
+
+# Pinned source dependencies required by a clean checkout
+!local-maven/**/*.jar
+
+# Local porting evidence is retained in the original workspace
+/*-evidence.json
+/native-*.json
+/NATIVE_*.md
+/PORTING_*.md

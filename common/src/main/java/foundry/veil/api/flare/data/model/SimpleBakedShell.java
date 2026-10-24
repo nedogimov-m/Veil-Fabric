@@ -1,14 +1,16 @@
 package foundry.veil.api.flare.data.model;
 
 import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.Tesselator;
-import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.ByteBufferBuilder;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
 import foundry.veil.api.client.render.vertex.VertexArray;
 import foundry.veil.api.flare.model.BakedShell;
 
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 
 /**
@@ -17,10 +19,10 @@ import java.util.List;
 public class SimpleBakedShell implements BakedShell {
 
     protected final List<FlareBakedQuad> faces;
-    private VertexArray vertexArray;
+    private final Map<VertexFormat, VertexArray> vertexArrays = new HashMap<>();
 
     public SimpleBakedShell(List<FlareBakedQuad> faces) {
-        this.faces = Collections.unmodifiableList(faces);
+        this.faces = List.copyOf(faces);
     }
 
     @Override
@@ -29,18 +31,21 @@ public class SimpleBakedShell implements BakedShell {
     }
 
     @Override
-    public VertexArray getVertexArray() {
-        if (this.vertexArray == null) {
-            BufferBuilder builder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.BLOCK);
-
-            for (FlareBakedQuad quad : this.faces) {
-                quad.putBakedQuadInto(builder);
-            }
-
-            this.vertexArray = VertexArray.create();
-            this.vertexArray.upload(builder.buildOrThrow(), VertexArray.DrawUsage.STATIC);
+    public VertexArray getVertexArray(CommandEncoder encoder, VertexFormat format) {
+        VertexArray existing = this.vertexArrays.get(format);
+        if (existing != null) return existing;
+        if (this.faces.isEmpty()) throw new IllegalStateException("Cannot upload an empty shell");
+        VertexArray mesh = VertexArray.create();
+        try (ByteBufferBuilder bytes = new ByteBufferBuilder(Math.multiplyExact(this.faces.size(), 4 * format.getVertexSize()))) {
+            BufferBuilder builder = new BufferBuilder(bytes, PrimitiveTopology.QUADS, format);
+            for (FlareBakedQuad quad : this.faces) quad.putBakedQuadInto(builder, format);
+            mesh.upload(encoder, builder.buildOrThrow(), VertexArray.DrawUsage.STATIC);
+        } catch (RuntimeException | Error failure) {
+            mesh.free();
+            throw failure;
         }
-        return this.vertexArray;
+        this.vertexArrays.put(format, mesh);
+        return mesh;
     }
 
     public static Builder builder() {
@@ -49,10 +54,8 @@ public class SimpleBakedShell implements BakedShell {
 
     @Override
     public void free() {
-        if (this.vertexArray != null) {
-            this.vertexArray.free();
-            this.vertexArray = null;
-        }
+        this.vertexArrays.values().forEach(VertexArray::free);
+        this.vertexArrays.clear();
     }
 
     public static class Builder {

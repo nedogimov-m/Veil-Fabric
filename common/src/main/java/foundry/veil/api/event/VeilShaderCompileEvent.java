@@ -1,8 +1,8 @@
 package foundry.veil.api.event;
 
 import foundry.veil.api.client.render.shader.ShaderManager;
-import foundry.veil.api.client.render.shader.program.ShaderProgram;
-import net.minecraft.resources.ResourceLocation;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
+import net.minecraft.resources.Identifier;
 
 import java.util.Map;
 
@@ -20,5 +20,5 @@ public interface VeilShaderCompileEvent {
      * @param shaderManager   The shader manager instance
      * @param updatedPrograms A view of the programs that have changed
      */
-    void onVeilCompileShaders(ShaderManager shaderManager, Map<ResourceLocation, ShaderProgram> updatedPrograms);
+    void onVeilCompileShaders(ShaderManager shaderManager, Map<Identifier, GpuShaderProgram> updatedPrograms);
 }

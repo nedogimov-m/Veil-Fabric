@@ -1,25 +1,20 @@
-#include veil:fog
+#version 330
+#extension GL_ARB_separate_shader_objects : require
+#include <minecraft:dynamictransforms.glsl>
+#include <minecraft:fog.glsl>
 
 uniform sampler2D Sampler0;
-
-uniform vec4 ColorModulator;
-uniform float FogStart;
-uniform float FogEnd;
-uniform vec4 FogColor;
-
-in float vertexDistance;
-in vec2 texCoord0;
-in vec4 vertexColor;
-in vec4 lightmapColor;
-
-out vec4 fragColor;
+layout(location = 0) in float sphericalVertexDistance;
+layout(location = 1) in float cylindricalVertexDistance;
+layout(location = 2) in vec2 texCoord0;
+layout(location = 3) in vec4 vertexColor;
+layout(location = 4) in vec4 lightmapColor;
+layout(location = 0) out vec4 fragColor;
 
 void main() {
     // #veil:albedo
     vec4 color = texture(Sampler0, texCoord0) * vertexColor * ColorModulator;
-    if (color.a < 0.01) {
-        discard;
-    }
-    fragColor = linear_fog(color * lightmapColor, vertexDistance, FogStart, FogEnd, FogColor);
+    if (color.a < 0.01) discard;
+    fragColor = apply_fog(color * lightmapColor, sphericalVertexDistance, cylindricalVertexDistance,
+        FogEnvironmentalStart, FogEnvironmentalEnd, FogRenderDistanceStart, FogRenderDistanceEnd, FogColor);
 }
-

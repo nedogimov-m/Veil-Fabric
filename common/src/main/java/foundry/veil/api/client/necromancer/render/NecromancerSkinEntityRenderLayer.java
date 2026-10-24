@@ -3,7 +3,7 @@ package foundry.veil.api.client.necromancer.render;
 import foundry.veil.api.client.necromancer.Skeleton;
 import foundry.veil.api.client.necromancer.SkeletonParent;
 import foundry.veil.api.client.render.MatrixStack;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.world.entity.Entity;
 import org.jetbrains.annotations.Nullable;
 
@@ -59,9 +59,10 @@ public abstract class NecromancerSkinEntityRenderLayer<T extends Entity & Skelet
      * @param partialTicks The percentage from last tick to this tick
      */
     protected void renderSkin(T parent, M skeleton, Skin skin, RenderType renderType, NecromancerRenderer renderer, MatrixStack matrixStack, int packedLight, float partialTicks) {
-        renderer.setTransform(matrixStack.position());
-        renderer.setLight(packedLight);
-        renderer.draw(renderType, skeleton, skin, partialTicks);
-        renderer.reset();
+        try {
+            renderer.setTransform(matrixStack.position());
+            renderer.setLight(packedLight);
+            renderer.draw(renderType, skeleton, skin, partialTicks);
+        } finally { renderer.reset(); }
     }
 }

@@ -1,7 +1,7 @@
 package foundry.veil.api.client.render.shader;
 
 import net.minecraft.resources.FileToIdConverter;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.util.Map;
 
@@ -84,7 +84,7 @@ public final class ShaderSourceSet {
      * @param location The location of the file
      * @return The GL type of the shader or <code>-1</code> if invalid
      */
-    public static int getShaderType(ResourceLocation location) {
+    public static int getShaderType(Identifier location) {
         for (Map.Entry<String, Integer> entry : EXTENSION_TYPES.entrySet()) {
             if (location.getPath().endsWith(entry.getKey())) {
                 return entry.getValue();

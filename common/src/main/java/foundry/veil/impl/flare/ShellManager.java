@@ -10,7 +10,7 @@ import foundry.veil.api.flare.data.model.FlareShell;
 import foundry.veil.api.flare.model.BakedShell;
 import foundry.veil.api.flare.model.ShellBakery;
 import net.minecraft.resources.FileToIdConverter;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimplePreparableReloadListener;
@@ -25,24 +25,24 @@ import java.util.HashMap;
 import java.util.Map;
 
 @ApiStatus.Internal
-public class ShellManager extends SimplePreparableReloadListener<Map<ResourceLocation, BakedShell>> implements NativeResource {
+public class ShellManager extends SimplePreparableReloadListener<Map<Identifier, BakedShell>> implements NativeResource {
 
     private static final FileToIdConverter CONVERTER = FileToIdConverter.json("flare/shells");
 
-    private Map<ResourceLocation, BakedShell> shells;
+    private Map<Identifier, BakedShell> shells;
 
     public ShellManager() {
         this.shells = Map.of();
     }
 
     @Override
-    protected @NotNull Map<ResourceLocation, BakedShell> prepare(@NotNull ResourceManager resourceManager, @NotNull ProfilerFiller profiler) {
-        Map<ResourceLocation, BakedShell> data = new HashMap<>();
+    protected @NotNull Map<Identifier, BakedShell> prepare(@NotNull ResourceManager resourceManager, @NotNull ProfilerFiller profiler) {
+        Map<Identifier, BakedShell> data = new HashMap<>();
 
-        Map<ResourceLocation, Resource> resources = CONVERTER.listMatchingResources(resourceManager);
-        for (Map.Entry<ResourceLocation, Resource> entry : resources.entrySet()) {
-            ResourceLocation location = entry.getKey();
-            ResourceLocation id = CONVERTER.fileToId(location);
+        Map<Identifier, Resource> resources = CONVERTER.listMatchingResources(resourceManager);
+        for (Map.Entry<Identifier, Resource> entry : resources.entrySet()) {
+            Identifier location = entry.getKey();
+            Identifier id = CONVERTER.fileToId(location);
 
             try (Reader reader = entry.getValue().openAsReader()) {
                 JsonElement element = JsonParser.parseReader(reader);
@@ -64,12 +64,12 @@ public class ShellManager extends SimplePreparableReloadListener<Map<ResourceLoc
     }
 
     @Override
-    protected void apply(@NotNull Map<ResourceLocation, BakedShell> map, @NotNull ResourceManager resourceManager, @NotNull ProfilerFiller profiler) {
+    protected void apply(@NotNull Map<Identifier, BakedShell> map, @NotNull ResourceManager resourceManager, @NotNull ProfilerFiller profiler) {
         this.free();
         this.shells = Collections.unmodifiableMap(map);
     }
 
-    public BakedShell getBakedShell(ResourceLocation shellLocation) {
+    public BakedShell getBakedShell(Identifier shellLocation) {
         return this.shells.getOrDefault(shellLocation, ShellBakery.MISSING_SHELL);
     }
 
@@ -79,5 +79,6 @@ public class ShellManager extends SimplePreparableReloadListener<Map<ResourceLoc
             shell.free();
         }
         this.shells = Map.of();
+        ShellBakery.MISSING_SHELL.free();
     }
 }

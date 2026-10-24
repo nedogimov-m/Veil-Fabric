@@ -49,7 +49,6 @@ public interface VeilPlatform {
     boolean hasChannel(PacketListener listener, CustomPacketPayload.Type<?> type);
 
     enum PlatformType {
-        NEOFORGE("NeoForge", "forge"),
         FABRIC("Fabric", "fabric");
 
         private final String platformName;

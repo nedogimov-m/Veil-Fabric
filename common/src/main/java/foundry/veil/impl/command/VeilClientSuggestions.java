@@ -2,7 +2,7 @@ package foundry.veil.impl.command;
 
 import foundry.veil.api.client.render.VeilRenderSystem;
 import foundry.veil.impl.client.editor.PostInspector;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.util.stream.Stream;
@@ -13,7 +13,7 @@ public final class VeilClientSuggestions {
     private VeilClientSuggestions() {
     }
 
-    public static Stream<ResourceLocation> getPostPipelineNames() {
+    public static Stream<Identifier> getPostPipelineNames() {
         return VeilRenderSystem.renderer().getPostProcessingManager().getPipelines().stream().filter(pipeline -> !PostInspector.isInternal(pipeline));
     }
 }

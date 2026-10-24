@@ -1,14 +1,13 @@
 package foundry.veil.api.client.property.properties;
 
-import com.mojang.blaze3d.shaders.Uniform;
 import foundry.veil.api.client.property.ImmutableProperty;
 import foundry.veil.api.client.property.Property;
 import foundry.veil.api.client.registry.PropertyRegistry;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
+import foundry.veil.api.client.render.gpu.GpuUniformBuffer;
 import foundry.veil.api.flare.data.effect.FlareMaterial;
 import foundry.veil.api.flare.modifier.PropertyModifier;
 import gg.moonflower.molangcompiler.api.MolangExpression;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.util.Mth;
 import org.joml.Vector4f;
 
@@ -16,7 +15,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * <p>Applies time in seconds since client booted up according to this vector: (t/20, t, t*2, t*3)</p>
+ * <p>Applies monotonic time in seconds according to this vector: (t/20, t, t*2, sin(t)).</p>
  * Added as a default property named <code>_Time</code> in all {@link FlareMaterial}.
  *
  * @author GuyApooye
@@ -31,11 +30,12 @@ public class TimeProperty extends Property<Vector4f> {
     }
 
     @Override
-    public void applyValue(String name, ShaderInstance shader) {
-        Uniform uniform = shader.getUniform(name);
+    public void applyValue(String name, GpuShaderProgram shader, String block) {
+        GpuUniformBuffer uniform = uniform(name, shader, block, GpuUniformBuffer.ValueType.VEC4);
         if (uniform != null) {
             float time = System.nanoTime() * 1e-9f;
-            uniform.set(this.value.set(time / 20.0f, time, 2.0f * time, Mth.sin(time % Mth.TWO_PI)));
+            this.value.set(time / 20.0f, time, 2.0f * time, Mth.sin(time % Mth.TWO_PI));
+            uniform.setVector(name, this.value.x, this.value.y, this.value.z, this.value.w);
         }
     }
 

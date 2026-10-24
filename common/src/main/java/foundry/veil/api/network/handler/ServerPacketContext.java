@@ -16,7 +16,7 @@ public interface ServerPacketContext extends PacketContext {
      * @return The Minecraft server instance
      */
     default MinecraftServer server() {
-        return this.player().getServer();
+        return this.player().level().getServer();
     }
 
     @Override

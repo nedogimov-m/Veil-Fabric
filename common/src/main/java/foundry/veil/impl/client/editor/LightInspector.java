@@ -1,6 +1,5 @@
 package foundry.veil.impl.client.editor;
 
-import foundry.imgui.api.ImGuiMC;
 import foundry.veil.api.client.color.Colorc;
 import foundry.veil.api.client.editor.EditorAttributeProvider;
 import foundry.veil.api.client.editor.SingleWindowInspector;
@@ -18,13 +17,10 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.DebugEntityNameGenerator;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 public class LightInspector extends SingleWindowInspector {
 
@@ -36,6 +32,7 @@ public class LightInspector extends SingleWindowInspector {
     private static final Component REMOVE_ALL_DESC = Component.translatable("inspector.veil.light.button.remove_all.desc");
     private static final Component SET_POSITION = Component.translatable("inspector.veil.light.button.set_position");
     private static final Component ATTRIBUTES = Component.translatable("inspector.veil.light.attributes");
+    private static final Component ENABLE_AO = Component.translatable("inspector.veil.light.toggle.ao");
 
     private final List<ResourceKey<LightTypeRegistry.LightType<?>>> lightTypes = new ArrayList<>();
     private ResourceKey<LightTypeRegistry.LightType<?>> selectedTab;
@@ -65,30 +62,29 @@ public class LightInspector extends SingleWindowInspector {
             this.selectedTab = this.lightTypes.getFirst();
         }
 
-        LightTypeRegistry.LightType<?> lightType = LightTypeRegistry.REGISTRY.get(this.selectedTab);
+        LightTypeRegistry.LightType<?> lightType = LightTypeRegistry.REGISTRY.getValue(this.selectedTab);
         ImGui.beginDisabled(lightType == null || lightType.debugLightFactory() == null);
         if (ImGui.button(ADD.getString()) && lightType != null && lightType.debugLightFactory() != null) {
             LightTypeRegistry.DebugLightFactory factory = lightType.debugLightFactory();
             Minecraft client = Minecraft.getInstance();
-            Camera mainCamera = client.gameRenderer.getMainCamera();
+            Camera mainCamera = client.gameRenderer.mainCamera();
             lightRenderer.addLight(factory.createDebugLight(client.level, mainCamera));
         }
         ImGui.endDisabled();
         if (ImGui.isItemHovered(ImGuiHoveredFlags.None)) {
-            VeilImGuiUtil.setTooltip(Component.translatable("inspector.veil.light.button.add.desc", this.selectedTab.location().toString()));
+            VeilImGuiUtil.setTooltip(Component.translatable("inspector.veil.light.button.add.desc", this.selectedTab.identifier().toString()));
         }
 
         ImGui.sameLine();
         ImGui.beginDisabled(lightType == null);
         if (ImGui.button(REMOVE.getString()) && lightType != null) {
-            List<? extends LightRenderHandle<?>> lights = List.copyOf(lightRenderer.getLights(lightType));
-            for (LightRenderHandle<?> handle : lights) {
+            for (LightRenderHandle<?> handle : List.copyOf(lightRenderer.getLights(lightType))) {
                 handle.free();
             }
         }
         ImGui.endDisabled();
         if (ImGui.isItemHovered(ImGuiHoveredFlags.None)) {
-            VeilImGuiUtil.setTooltip(Component.translatable("inspector.veil.light.button.remove.desc", this.selectedTab.location().toString()));
+            VeilImGuiUtil.setTooltip(Component.translatable("inspector.veil.light.button.remove.desc", this.selectedTab.identifier().toString()));
         }
 
         ImGui.sameLine();
@@ -101,11 +97,11 @@ public class LightInspector extends SingleWindowInspector {
 
         ImGui.beginTabBar("##lights");
         for (ResourceKey<LightTypeRegistry.LightType<?>> key : this.lightTypes) {
-            ResourceLocation id = key.location();
+            Identifier id = key.identifier();
             if (ImGui.beginTabItem(id.toString())) {
                 this.selectedTab = key;
                 int i = 0;
-                List<? extends LightRenderHandle<?>> lightData = List.copyOf(lightRenderer.getLights(LightTypeRegistry.REGISTRY.get(key)));
+                List<? extends LightRenderHandle<?>> lightData = List.copyOf(lightRenderer.getLights(LightTypeRegistry.REGISTRY.getValue(key)));
                 for (LightRenderHandle<?> handle : lightData) {
                     ImGui.pushID("light" + i);
                     renderLightComponents(handle);
@@ -122,7 +118,7 @@ public class LightInspector extends SingleWindowInspector {
     public void onShow() {
         super.onShow();
         this.lightTypes.clear();
-        this.lightTypes.addAll(LightTypeRegistry.REGISTRY.registryKeySet().stream().sorted(Comparator.comparing(ResourceKey::location)).toList());
+        this.lightTypes.addAll(LightTypeRegistry.REGISTRY.registryKeySet().stream().sorted(Comparator.comparing(ResourceKey::identifier)).toList());
     }
 
     private static void renderLightComponents(LightRenderHandle<?> handle) {
@@ -156,11 +152,11 @@ public class LightInspector extends SingleWindowInspector {
         }
 
         if (ImGui.button(SET_POSITION.getString())) {
-            lightData.setTo(Minecraft.getInstance().gameRenderer.getMainCamera());
+            lightData.setTo(Minecraft.getInstance().gameRenderer.mainCamera());
         }
 
         ImGui.newLine();
-        ImGuiMC.component(ATTRIBUTES);
+        VeilImGuiUtil.component(ATTRIBUTES);
 
         if (lightData instanceof EditorAttributeProvider editorAttributeProvider) {
             editorAttributeProvider.renderImGuiAttributes();

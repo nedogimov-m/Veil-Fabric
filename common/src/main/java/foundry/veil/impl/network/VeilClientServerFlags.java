@@ -6,7 +6,7 @@ import foundry.veil.api.event.VeilRenderLevelStageEvent;
 import foundry.veil.platform.VeilEventPlatform;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -15,17 +15,17 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 public final class VeilClientServerFlags {
 
-    private static final Object2IntMap<ResourceLocation> ACTIVE_PIPELINES = new Object2IntOpenHashMap<>();
+    private static final Object2IntMap<Identifier> ACTIVE_PIPELINES = new Object2IntOpenHashMap<>();
 
     static {
-        VeilEventPlatform.INSTANCE.onVeilRenderLevelStage((stage, levelRenderer, bufferSource, matrixStack, frustumMatrix, projectionMatrix, renderTick, deltaTracker, camera, frustum) -> {
-            if (stage == VeilRenderLevelStageEvent.Stage.AFTER_SKY) {
+        VeilEventPlatform.INSTANCE.onVeilRenderLevelStage((stage, context) -> {
+            if (stage == VeilRenderLevelStageEvent.Stage.START_MAIN) {
                 if (ACTIVE_PIPELINES.isEmpty()) {
                     return;
                 }
 
                 PostProcessingManager postProcessingManager = VeilRenderSystem.renderer().getPostProcessingManager();
-                for (Object2IntMap.Entry<ResourceLocation> entry : ACTIVE_PIPELINES.object2IntEntrySet()) {
+                for (Object2IntMap.Entry<Identifier> entry : ACTIVE_PIPELINES.object2IntEntrySet()) {
                     postProcessingManager.add(entry.getIntValue(), entry.getKey());
                 }
             }
@@ -35,19 +35,19 @@ public final class VeilClientServerFlags {
     private VeilClientServerFlags() {
     }
 
-    public static void addPipeline(int priority, ResourceLocation pipeline) {
+    public static void addPipeline(int priority, Identifier pipeline) {
         VeilRenderSystem.renderer().getPostProcessingManager().add(priority, pipeline);
         ACTIVE_PIPELINES.put(pipeline, priority);
     }
 
-    public static void removePipeline(ResourceLocation pipeline) {
+    public static void removePipeline(Identifier pipeline) {
         VeilRenderSystem.renderer().getPostProcessingManager().remove(pipeline);
         ACTIVE_PIPELINES.removeInt(pipeline);
     }
 
     public static void clearPipelines() {
         PostProcessingManager postProcessingManager = VeilRenderSystem.renderer().getPostProcessingManager();
-        for (ResourceLocation pipeline : ACTIVE_PIPELINES.keySet()) {
+        for (Identifier pipeline : ACTIVE_PIPELINES.keySet()) {
             postProcessingManager.remove(pipeline);
         }
         ACTIVE_PIPELINES.clear();

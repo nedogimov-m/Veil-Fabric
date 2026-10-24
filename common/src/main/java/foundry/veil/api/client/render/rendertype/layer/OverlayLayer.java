@@ -3,7 +3,6 @@ package foundry.veil.api.client.render.rendertype.layer;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
-import foundry.veil.api.client.render.rendertype.VeilRenderType;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
 
 public record OverlayLayer(boolean enabled) implements RenderTypeLayer {
@@ -14,7 +13,7 @@ public record OverlayLayer(boolean enabled) implements RenderTypeLayer {
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        builder.overlayState(this.enabled ? VeilRenderType.overlay() : VeilRenderType.noOverlay());
+        builder.overlayState(this.enabled);
     }
 
     @Override

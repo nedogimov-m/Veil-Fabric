@@ -1,57 +1,55 @@
 package foundry.veil.impl.client.render.shader.compiler;
 
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.pipeline.ShaderSource;
 import foundry.veil.api.client.render.shader.compiler.CompiledShader;
 import foundry.veil.api.client.render.shader.compiler.ShaderException;
-import foundry.veil.api.client.render.shader.compiler.VeilShaderSource;
-import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
-import net.minecraft.resources.ResourceLocation;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
-import java.util.Objects;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import java.util.concurrent.Executor;
 
-/**
- * Attempts to cache the exact same shader sources to reduce the number of compiled shaders.
- *
- * @author Ocelot
- */
+/** Caches exact immutable pipeline/source owners, without hashing away source or draw-state differences. */
 @ApiStatus.Internal
 public class CachedShaderCompiler extends DirectShaderCompiler {
+    private final Map<RenderPipeline, Map<ShaderSource, CompiledShader>> suppliedSources = new IdentityHashMap<>();
+    private final Map<RenderPipeline, CompiledShader> providerSources = new IdentityHashMap<>();
+    private boolean loadingProvider;
 
-    private final Int2ObjectMap<CompiledShader> shaders;
+    public CachedShaderCompiler(GpuDevice device, @Nullable ShaderProvider provider) { super(device, provider); }
 
-    public CachedShaderCompiler(@Nullable ShaderProvider provider) {
-        super(provider);
-        this.shaders = new Int2ObjectArrayMap<>();
+    @Override public CompiledShader compile(RenderPipeline pipeline, Executor workers) throws IOException, ShaderException {
+        this.ensureOpen();
+        CompiledShader cached = this.providerSources.get(pipeline);
+        if (cached != null) return cached.retain();
+        this.loadingProvider = true;
+        try {
+            CompiledShader compiled = super.compile(pipeline, workers);
+            this.providerSources.put(pipeline, compiled);
+            return compiled.retain();
+        } finally { this.loadingProvider = false; }
     }
-
-    @Override
-    public CompiledShader compile(int type, ResourceLocation path) throws IOException, ShaderException {
-        int hash = Objects.hash(type, path);
-        if (this.shaders.containsKey(hash)) {
-            return this.shaders.get(hash);
+    @Override public CompiledShader compile(RenderPipeline pipeline, ShaderSource source, Executor workers) throws ShaderException {
+        this.ensureOpen();
+        // The provider overload owns and closes this temporary source after compilation.
+        if (this.loadingProvider) return super.compile(pipeline, source, workers);
+        Map<ShaderSource, CompiledShader> sources = this.suppliedSources.computeIfAbsent(pipeline, ignored -> new IdentityHashMap<>());
+        CompiledShader cached = sources.get(source);
+        if (cached == null) {
+            cached = super.compile(pipeline, source, workers);
+            sources.put(source, cached);
         }
-        CompiledShader shader = super.compile(type, path);
-        this.shaders.put(hash, shader);
-        return shader;
+        return cached.retain();
     }
-
-    @Override
-    public CompiledShader compile(int type, VeilShaderSource source) throws ShaderException {
-        int hash = Objects.hash(type, source.sourceId());
-        if (this.shaders.containsKey(hash)) {
-            return this.shaders.get(hash);
-        }
-        CompiledShader shader = super.compile(type, source);
-        this.shaders.put(hash, shader);
-        return shader;
+    /** Call on resource reload; existing caller leases remain live through their last draw. */
+    public void clear() {
+        this.providerSources.values().forEach(CompiledShader::close); this.providerSources.clear();
+        this.suppliedSources.values().forEach(sources -> sources.values().forEach(CompiledShader::close));
+        this.suppliedSources.clear();
     }
-
-    @Override
-    public void free() {
-        super.free();
-        this.shaders.clear();
-    }
+    @Override public void free() { this.clear(); super.free(); }
 }

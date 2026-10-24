@@ -1,137 +1,94 @@
 package foundry.veil.api.client.render.shader.block;
 
-import foundry.veil.api.client.render.VeilRenderSystem;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.device.GpuDevice;
 import foundry.veil.impl.client.render.shader.block.DynamicShaderBlockImpl;
 import foundry.veil.impl.client.render.shader.block.SizedShaderBlockImpl;
 import foundry.veil.impl.client.render.shader.block.WrapperShaderBlockImpl;
 import io.github.ocelot.glslprocessor.api.grammar.GlslTypeQualifier;
 import org.jetbrains.annotations.Nullable;
 import org.lwjgl.system.NativeResource;
-
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 
-import static org.lwjgl.opengl.GL31C.GL_UNIFORM_BUFFER;
-import static org.lwjgl.opengl.GL43C.GL_SHADER_STORAGE_BUFFER;
-
-/**
- * <p>Defines a block of memory on the GPU that can be referenced as a uniform or shader block.</p>
- * <p>{@link #update(Object)} changes the data in the block of memory.</p>
- * <p>{@link VeilRenderSystem#bind(CharSequence, ShaderBlock)} must be called for shaders to access block data.</p>
- * <p>The result is a lazy buffer that only updates contents when the Java data has been changed.</p>
- *
- * @param <T> The type of object to serialize
- * @author Ocelot
- */
+/** Serialized native buffer block. Upload before opening the pass; bind by its shader name. */
 public interface ShaderBlock<T> extends NativeResource {
-
-    /**
-     * Creates a new shader block with a fixed size.
-     *
-     * @param binding    The buffer attachment point
-     * @param size       The size of the buffer in bytes
-     * @param serializer The serializer to fill the buffer
-     * @param <T>        The type of data to write
-     * @return A new shader block
-     */
     static <T> ShaderBlock<T> withSize(BufferBinding binding, int size, BiConsumer<T, ByteBuffer> serializer) {
-        return new SizedShaderBlockImpl<>(binding, size, serializer);
+        return withSize(RenderSystem.getDevice(), binding, size, serializer);
     }
-
-    /**
-     * Creates a new shader block with a dynamically-changing size. The initial size is set to <code>256</code>.
-     *
-     * @param binding    The buffer attachment point
-     * @param serializer The serializer to fill the buffer
-     * @param <T>        The type of data to write
-     * @return A new shader block
-     */
+    static <T> ShaderBlock<T> withSize(GpuDevice device, BufferBinding binding, int size, BiConsumer<T, ByteBuffer> serializer) {
+        return new SizedShaderBlockImpl<>(device, binding, size, serializer);
+    }
     static <T> DynamicShaderBlock<T> dynamic(BufferBinding binding, BiConsumer<T, ByteBuffer> serializer) {
         return dynamic(binding, 256, serializer);
     }
-
-    /**
-     * Creates a new shader block with a dynamically-changing size.
-     *
-     * @param binding     The buffer attachment point
-     * @param initialSize The initial size of the buffer
-     * @param serializer  The serializer to fill the buffer
-     * @param <T>         The type of data to write
-     * @return A new shader block
-     */
-    static <T> DynamicShaderBlock<T> dynamic(BufferBinding binding, int initialSize, BiConsumer<T, ByteBuffer> serializer) {
-        return new DynamicShaderBlockImpl<>(binding, initialSize, serializer);
+    static <T> DynamicShaderBlock<T> dynamic(BufferBinding binding, int size, BiConsumer<T, ByteBuffer> serializer) {
+        return new DynamicShaderBlockImpl<>(RenderSystem.getDevice(), binding, size, serializer);
     }
-
-    /**
-     * Creates a new shader block that points to an existing GL buffer.
-     *
-     * @param binding The buffer attachment point
-     * @param buffer  The buffer to bind as a shader block
-     * @return A new shader block
-     */
-    static DynamicShaderBlock<?> wrapper(BufferBinding binding, int buffer) {
+    static <T> DynamicShaderBlock<T> dynamic(GpuDevice device, BufferBinding binding, int size, BiConsumer<T, ByteBuffer> serializer) {
+        return new DynamicShaderBlockImpl<>(device, binding, size, serializer);
+    }
+    /** The wrapper borrows the typed slice; free never closes its backing buffer. */
+    static DynamicShaderBlock<?> wrapper(BufferBinding binding, GpuBufferSlice buffer) {
         return new WrapperShaderBlockImpl(binding, buffer);
     }
-
-    /**
-     * Sets the value of this block. Data is only updated if the result of equals is <code>false</code>.
-     *
-     * @param value The new value
-     */
-    default void update(@Nullable T value) {
-        if (!Objects.equals(this.getValue(), value)) {
-            this.set(value);
-        }
-    }
-
-    /**
-     * Sets the value of this block. Sets the value regardless if it has changed or not.
-     *
-     * @param value The new value
-     */
+    default void update(@Nullable T value) { if (!Objects.equals(this.getValue(), value)) this.set(value); }
     void set(@Nullable T value);
+    @Nullable T getValue();
+    void prepare(CommandEncoder encoder);
+    /** Capture this draw without GPU commands. Owned values are serialized now; borrowed ranges retain their owner contract. */
+    Snapshot snapshot();
+    GpuBufferSlice slice();
+    BufferBinding getBinding();
+    default void bind(RenderPass pass, String name) { pass.setUniform(name, this.slice()); }
 
-    /**
-     * @return The value stored in this block
-     */
-    @Nullable
-    T getValue();
-
-    /**
-     * The bindings shaders blocks can be attached to.
-     */
-    enum BufferBinding {
-        UNIFORM(GL_UNIFORM_BUFFER),
-        SHADER_STORAGE(GL_SHADER_STORAGE_BUFFER);
-
-        private final int glType;
-
-        BufferBinding(int glType) {
-            this.glType = glType;
+    /** Immutable serialized bytes or an explicitly borrowed range, independent of later block mutation/disposal. */
+    final class Snapshot {
+        private final GpuDevice device;
+        private final ByteBuffer bytes;
+        private final GpuBufferSlice borrowed;
+        private Snapshot(GpuDevice device, ByteBuffer bytes, GpuBufferSlice borrowed) {
+            this.device = device; this.bytes = bytes; this.borrowed = borrowed;
         }
-
-        public int getGlType() {
-            return this.glType;
+        public static Snapshot serialized(GpuDevice device, ByteBuffer source) {
+            Objects.requireNonNull(device); Objects.requireNonNull(source);
+            if (!source.hasRemaining() || source.remaining() % 16 != 0) throw new IllegalArgumentException("Serialized UBO snapshots require positive, 16-byte padded data");
+            ByteBuffer copy = ByteBuffer.allocateDirect(source.remaining()).order(ByteOrder.nativeOrder());
+            copy.put(source.duplicate()).flip();
+            return new Snapshot(device, copy.asReadOnlyBuffer().order(ByteOrder.nativeOrder()), null);
+        }
+        public static Snapshot borrowed(GpuBufferSlice range) {
+            Objects.requireNonNull(range);
+            if (range.buffer().isClosed()) throw new IllegalStateException("Borrowed shader block storage is closed");
+            return new Snapshot(null, null, range);
+        }
+        public boolean isBorrowed() { return this.borrowed != null; }
+        public ByteBuffer bytes() {
+            if (this.bytes == null) throw new IllegalStateException("Borrowed GPU storage has no CPU snapshot");
+            return this.bytes.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+        }
+        /** Upload into a distinct native transient range before opening the render pass. */
+        public GpuBufferSlice prepare(CommandEncoder encoder) {
+            if (this.borrowed != null) {
+                if (this.borrowed.buffer().isClosed()) throw new IllegalStateException("Borrowed shader block storage expired before draw submission");
+                return this.borrowed;
+            }
+            return encoder.transientMemory().uploadGpu(this.bytes(),
+                    this.device.getDeviceInfo().limits().minUniformOffsetAlignment(), GpuBuffer.USAGE_UNIFORM);
         }
     }
 
-    /**
-     * Valid memory layouts for blocks. Used to decide how to generate GLSL code.
-     */
+    enum BufferBinding { UNIFORM, SHADER_STORAGE }
     enum MemoryLayout {
         PACKED, SHARED, STD140, STD430;
-
-        private final GlslTypeQualifier.LayoutId layoutId;
-
-        MemoryLayout() {
-            this.layoutId = new GlslTypeQualifier.LayoutId(this.name().toLowerCase(Locale.ROOT), null);
-        }
-
-        public GlslTypeQualifier.LayoutId getLayoutId() {
-            return this.layoutId;
-        }
+        private final GlslTypeQualifier.LayoutId layoutId = new GlslTypeQualifier.LayoutId(this.name().toLowerCase(Locale.ROOT), null);
+        public GlslTypeQualifier.LayoutId getLayoutId() { return this.layoutId; }
     }
 }

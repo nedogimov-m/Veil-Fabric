@@ -6,7 +6,7 @@ import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.RegistryDataLoader;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.PreparableReloadListener;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.util.profiling.ProfilerFiller;
@@ -29,8 +29,8 @@ public class FlareManager {
     public static final ResourceKey<Registry<FlareModule>> EFFECT_MODULES = createRegistryKey("flare/modules");
 
     private static final List<RegistryDataLoader.RegistryData<?>> REGISTRIES = List.of(
-            new RegistryDataLoader.RegistryData<>(EFFECT_TEMPLATES, FlareEffectTemplate.CODEC, false),
-            new RegistryDataLoader.RegistryData<>(EFFECT_MODULES, FlareModule.CODEC, false)
+            new RegistryDataLoader.RegistryData<>(EFFECT_TEMPLATES, FlareEffectTemplate.CODEC, net.minecraft.resources.RegistryValidator.none()),
+            new RegistryDataLoader.RegistryData<>(EFFECT_MODULES, FlareModule.CODEC, net.minecraft.resources.RegistryValidator.none())
     );
     private static RegistryAccess registryAccess = RegistryAccess.EMPTY;
 
@@ -56,7 +56,8 @@ public class FlareManager {
         }
 
         @Override
-        public @NotNull CompletableFuture<Void> reload(PreparationBarrier preparationBarrier, @NotNull ResourceManager resourceManager, @NotNull ProfilerFiller preparationsProfiler, @NotNull ProfilerFiller reloadProfiler, @NotNull Executor backgroundExecutor, @NotNull Executor gameExecutor) {
+        public @NotNull CompletableFuture<Void> reload(SharedState shared, @NotNull Executor backgroundExecutor, PreparationBarrier preparationBarrier, @NotNull Executor gameExecutor) {
+            ResourceManager resourceManager = shared.resourceManager();
             return VeilDynamicRegistry.loadRegistries(resourceManager, REGISTRIES, backgroundExecutor)
                     .thenCompose(preparationBarrier::wait)
                     .thenAcceptAsync(data -> {
@@ -66,8 +67,8 @@ public class FlareManager {
                         if (msg != null) {
                             LOGGER.error("Flare registry loading errors:{}", msg);
                         }
-                        LOGGER.info("Loaded {} templates", registryAccess.registryOrThrow(EFFECT_TEMPLATES).size());
-                        LOGGER.info("Loaded {} modules", registryAccess.registryOrThrow(EFFECT_MODULES).size());
+                        registryAccess.lookup(EFFECT_TEMPLATES).ifPresent(registry -> LOGGER.info("Loaded {} templates", registry.size()));
+                        registryAccess.lookup(EFFECT_MODULES).ifPresent(registry -> LOGGER.info("Loaded {} modules", registry.size()));
                     }, gameExecutor);
         }
 

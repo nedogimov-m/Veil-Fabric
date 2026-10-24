@@ -3,7 +3,6 @@ package foundry.veil.api.client.render.rendertype.layer;
 import com.mojang.serialization.MapCodec;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
-import net.minecraft.client.renderer.RenderStateShard;
 
 import java.util.Arrays;
 
@@ -17,11 +16,7 @@ public record MultiTextureLayer(TextureLayer[] textures) implements RenderTypeLa
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        RenderStateShard.MultiTextureStateShard.Builder textureBuilder = RenderStateShard.MultiTextureStateShard.builder();
-        for (TextureLayer texture : this.textures) {
-            textureBuilder.add(texture.texture().parse(params), texture.blur(), texture.mipmap());
-        }
-        builder.textureState(textureBuilder.build());
+        builder.textureState(java.util.Arrays.stream(this.textures).map(texture -> new VeilRenderTypeBuilder.Texture(texture.texture().parse(params), texture.blur(), texture.mipmap())).toList());
     }
 
     @Override

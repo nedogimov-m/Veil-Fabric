@@ -1,68 +1,21 @@
 package foundry.veil.impl.client.render.light;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.MeshData;
-import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import foundry.veil.api.client.render.gpu.NativeLightInstances;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import com.mojang.renderpearl.api.textures.GpuSampler;
 import foundry.veil.Veil;
 import foundry.veil.api.client.render.light.data.PointLightData;
 import foundry.veil.api.client.render.light.renderer.*;
-import foundry.veil.api.client.render.rendertype.VeilRenderType;
-import foundry.veil.api.client.render.vertex.VertexArray;
-import foundry.veil.api.client.render.vertex.VertexArrayBuilder;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.resources.ResourceLocation;
-import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.Nullable;
+import net.minecraft.resources.Identifier;
 import org.joml.Vector3fc;
 
-import java.util.List;
-
-@ApiStatus.Internal
-public class InstancedPointLightRenderer extends InstancedLightRenderer<PointLightData> implements DDALightRenderer<PointLightData> {
-
-    private static final ResourceLocation RENDER_TYPE = Veil.veilPath("light/point");
-    private static final ResourceLocation INSCATTERING_RENDER_TYPE = Veil.veilPath("light/inscattering/point");
-
-    public InstancedPointLightRenderer() {
-        super(Float.BYTES * 9);
-    }
-
-    @Override
-    protected MeshData createMesh() {
-        BufferBuilder builder = RenderSystem.renderThreadTesselator().begin(VertexFormat.Mode.TRIANGLE_STRIP, DefaultVertexFormat.POSITION);
-        LightTypeRenderer.createInvertedCube(builder);
-        return builder.buildOrThrow();
-    }
-
-    @Override
-    protected void setupBufferState(VertexArrayBuilder builder) {
-        builder.setVertexAttribute(1, VertexArray.INSTANCE_BUFFER, 3, VertexArrayBuilder.DataType.FLOAT, false, 0); // LightPosition
-        builder.setVertexAttribute(2, VertexArray.INSTANCE_BUFFER, 3, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 3); // Color
-        builder.setVertexAttribute(3, VertexArray.INSTANCE_BUFFER, 3, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 6); // distance/occlusion/in-scatting
-    }
-
-    @Override
-    protected @Nullable RenderType getRenderType(List<? extends LightRenderHandle<PointLightData>> lights) {
-        return VeilRenderType.get(RENDER_TYPE);
-    }
-
-    @Override
-    protected @Nullable RenderType getInscatteringRenderType(List<? extends LightRenderHandle<PointLightData>> lights) {
-        return VeilRenderType.get(INSCATTERING_RENDER_TYPE);
-    }
-
-    @Override
-    public void uploadVoxelGridUniforms(int voxelGridTexture, Vector3fc voxelGridOrigin) {
-        RenderType renderType = VeilRenderType.get(RENDER_TYPE);
-        if (renderType == null) {
-            return;
-        }
-
-        ResourceLocation veilShaderId = VeilRenderType.getShards(renderType).veilShaderId();
-        if (veilShaderId != null) {
-            DDALightRenderer.uploadVoxelGridUniforms(veilShaderId, voxelGridTexture, voxelGridOrigin);
-        }
-    }
+public final class InstancedPointLightRenderer extends InstancedLightRenderer<PointLightData> implements DDALightRenderer<PointLightData> {
+    public static final VertexFormat INSTANCES = NativeLightInstances.POINT;
+    public InstancedPointLightRenderer() { super(32); }
+    @Override protected void createMesh(VertexConsumer builder) { LightTypeRenderer.createInvertedCube(builder); }
+    @Override protected VertexFormat instanceFormat() { return INSTANCES; }
+    @Override protected Identifier shader() { return Veil.veilPath("light/point"); }
+    @Override public void uploadVoxelGridUniforms(GpuTextureView grid, GpuSampler sampler, Vector3fc origin) { this.setVoxelGrid(grid, sampler, origin); }
 }

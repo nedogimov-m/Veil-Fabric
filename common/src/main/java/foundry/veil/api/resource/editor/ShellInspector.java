@@ -10,7 +10,6 @@ import com.mojang.serialization.JsonOps;
 import foundry.veil.Veil;
 import foundry.veil.api.client.imgui.VeilImGuiUtil;
 import foundry.veil.api.client.render.rendertype.VeilRenderType;
-import foundry.veil.api.client.render.vertex.VertexArray;
 import foundry.veil.api.flare.data.model.FlareShell;
 import foundry.veil.api.flare.model.BakedShell;
 import foundry.veil.api.resource.VeilEditorEnvironment;
@@ -23,9 +22,9 @@ import imgui.flag.ImGuiCond;
 import imgui.flag.ImGuiMouseButton;
 import imgui.flag.ImGuiWindowFlags;
 import imgui.type.ImBoolean;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.joml.*;
 
 import java.io.Reader;
@@ -39,7 +38,7 @@ import java.lang.Math;
 public class ShellInspector implements ResourceFileEditor<ShellResource> {
 
     private static final Component TITLE = Component.translatable("inspector.veil.shell.title");
-    public static final ResourceLocation RENDER_TYPE = Veil.veilPath("debug/shell");
+    public static final Identifier RENDER_TYPE = Veil.veilPath("debug/shell");
 
     private final ImBoolean open;
     private final VeilResourceManager resourceManager;
@@ -50,6 +49,7 @@ public class ShellInspector implements ResourceFileEditor<ShellResource> {
     private float cameraDistance;
 
     private BakedShell shell;
+    private foundry.veil.api.client.render.gpu.NativeFeatureScene nativeScene;
 
     public ShellInspector(VeilEditorEnvironment environment, ShellResource resource) {
         this.open = new ImBoolean(true);
@@ -81,7 +81,7 @@ public class ShellInspector implements ResourceFileEditor<ShellResource> {
                 return;
             }
 
-            int texture = VeilImGuiUtil.renderArea(desiredWidth, desiredHeight, fbo -> {
+            var texture = VeilImGuiUtil.renderArea(desiredWidth, desiredHeight, fbo -> {
 
                 Quaterniond cameraOrientation = new Quaterniond().rotateX(this.offsetXRot).rotateY(this.offsetYRot);
                 Vector3d cameraPos = cameraOrientation.transformInverse(new Vector3d(0.0, 0.0, this.cameraDistance)).add(0.0, 0.0, 0.0);
@@ -89,7 +89,8 @@ public class ShellInspector implements ResourceFileEditor<ShellResource> {
                 Matrix4f viewMatrix = new Matrix4f().rotate(new Quaternionf(cameraOrientation)).translate((float) -cameraPos.x, (float) -cameraPos.y, (float) -cameraPos.z);
 
                 float aspect = (float) desiredWidth / (float) desiredHeight;
-                Matrix4f projMat = new Matrix4f().perspective((float) Math.toRadians(40.0), aspect, 0.3f, 1000.0f);
+                Matrix4f projMat = new Matrix4f().perspective((float) Math.toRadians(40.0), aspect, 1000.0f, 0.3f, RenderSystem.getDevice().getDeviceInfo().isZZeroToOne());
+                if (RenderSystem.getDevice().getDeviceInfo().backendName().toLowerCase(java.util.Locale.ROOT).contains("vulkan")) projMat.m11(-projMat.m11());
                 Matrix4f modelView = new Matrix4f().mul(viewMatrix);
 
                 // draw!
@@ -97,28 +98,24 @@ public class ShellInspector implements ResourceFileEditor<ShellResource> {
                 if (renderType == null) {
                     return;
                 }
-                Matrix4fStack stack = RenderSystem.getModelViewStack();
-
-                stack.pushMatrix();
-                stack.set(modelView);
-                RenderSystem.applyModelViewMatrix();
-                RenderSystem.backupProjectionMatrix();
-                RenderSystem.setProjectionMatrix(projMat, VertexSorting.ORTHOGRAPHIC_Z);
-
-                this.shell.getVertexArray().bind();
-                this.shell.getVertexArray().drawWithRenderType(renderType);
-                VertexArray.unbind();
-
-                stack.popMatrix();
-                RenderSystem.restoreProjectionMatrix();
-                RenderSystem.applyModelViewMatrix();
+                var client = net.minecraft.client.Minecraft.getInstance();
+                if (this.nativeScene == null) this.nativeScene = new foundry.veil.api.client.render.gpu.NativeFeatureScene(client, client.getResourceManager());
+                var inputs = foundry.veil.api.client.render.gpu.NativeFeatureScene.Inputs.capture(client);
+                inputs.options().improvedTransparency = false;
+                this.nativeScene.render(fbo, projMat, com.mojang.blaze3d.ProjectionType.PERSPECTIVE, modelView, inputs, collector -> {
+                    try (var capture = foundry.veil.impl.client.render.rendertype.NativeRenderTypeDraws.beginCapture(fbo)) {
+                        var mesh = this.shell.getVertexArray(renderType.format());
+                        foundry.veil.impl.client.render.rendertype.NativeRenderTypeDraws.captureMesh(renderType, mesh, modelView, shader -> {});
+                        capture.submit(RenderSystem.getDevice().createCommandEncoder());
+                    }
+                });
             });
 
             if (ImGui.beginChild("3D View", desiredWidth / 2.0F + 2, desiredHeight / 2.0F + 2, false, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoMove)) {
                 if (ImGui.isWindowHovered()) {
                     this.applyCameraChanges();
                 }
-                ImGui.imageWithBg(texture, desiredWidth / 2.0F, desiredHeight / 2.0F, 0, 1, 1, 0, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 0.1F);
+                foundry.imgui.api.ImGuiMC.imageWithBg(foundry.imgui.api.ImGuiMC.getTexture(texture), desiredWidth / 2.0F, desiredHeight / 2.0F, 0, 1, 1, 0, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 0.1F);
             }
             ImGui.endChild();
         }
@@ -148,6 +145,7 @@ public class ShellInspector implements ResourceFileEditor<ShellResource> {
 
     @Override
     public void loadFromDisk() {
+        if (this.nativeScene != null) { this.nativeScene.close(); this.nativeScene = null; }
         if (this.shell != null) {
             this.shell.free();
             this.shell = null;
@@ -170,6 +168,7 @@ public class ShellInspector implements ResourceFileEditor<ShellResource> {
     @Override
     public void close() {
         ResourceFileEditor.super.close();
+        if (this.nativeScene != null) { this.nativeScene.close(); this.nativeScene = null; }
         if (this.shell != null) {
             this.shell.free();
             this.shell = null;

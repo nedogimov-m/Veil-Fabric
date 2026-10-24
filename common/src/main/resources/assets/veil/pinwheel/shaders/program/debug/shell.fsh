@@ -1,14 +1,7 @@
-uniform sampler2D Sampler0;
-
-uniform vec4 ColorModulator;
-uniform float FogStart;
-uniform float FogEnd;
-uniform vec4 FogColor;
-
-in vec3 vertexNormal;
-
-out vec4 fragColor;
-
+#version 330
+#extension GL_ARB_separate_shader_objects : require
+layout(location = 0) in vec3 vertexNormal;
+layout(location = 0) out vec4 fragColor;
 void main() {
-    fragColor = vec4(abs(vertexNormal), 1.0) * ColorModulator;
+    fragColor = vec4(abs(vertexNormal), 1.0);
 }

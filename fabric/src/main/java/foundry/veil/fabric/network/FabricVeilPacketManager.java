@@ -18,7 +18,7 @@ public class FabricVeilPacketManager implements VeilPacketManager {
 
     @Override
     public <T extends CustomPacketPayload> void registerClientbound(CustomPacketPayload.Type<T> id, StreamCodec<? super RegistryFriendlyByteBuf, T> codec, PacketHandler<ClientPacketContext, T> handler, boolean optional) {
-        PayloadTypeRegistry.playS2C().register(id, codec);
+        PayloadTypeRegistry.clientboundPlay().register(id, codec);
         if (FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT) {
             ClientPlayNetworking.registerGlobalReceiver(id, (payload, context) -> handler.handlePacket(payload, new FabricClientPacketContext(context)));
         }
@@ -26,7 +26,7 @@ public class FabricVeilPacketManager implements VeilPacketManager {
 
     @Override
     public <T extends CustomPacketPayload> void registerServerbound(CustomPacketPayload.Type<T> id, StreamCodec<? super RegistryFriendlyByteBuf, T> codec, PacketHandler<ServerPacketContext, T> handler, boolean optional) {
-        PayloadTypeRegistry.playC2S().register(id, codec);
+        PayloadTypeRegistry.serverboundPlay().register(id, codec);
         ServerPlayNetworking.registerGlobalReceiver(id, (payload, context) -> handler.handlePacket(payload, new FabricServerPacketContext(context)));
     }
 }

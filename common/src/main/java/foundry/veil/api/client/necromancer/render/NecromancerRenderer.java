@@ -1,11 +1,11 @@
 package foundry.veil.api.client.necromancer.render;
 
 import foundry.veil.api.client.necromancer.Skeleton;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import org.joml.Matrix4fc;
 
-public interface NecromancerRenderer extends MultiBufferSource {
+/** Captures immutable skeletal geometry for native feature collection or an extracted entity state. */
+public interface NecromancerRenderer {
 
     void setUv1(int u, int v);
 
@@ -18,11 +18,11 @@ public interface NecromancerRenderer extends MultiBufferSource {
     void setTransform(Matrix4fc transform);
 
     default void setLight(int packedLight) {
-        this.setUv2(packedLight >> 4 & 65535, packedLight >> 20 & 65535);
+        this.setUv2(packedLight & 65535, packedLight >>> 16 & 65535);
     }
 
     default void setOverlay(int packedOverlay) {
-        this.setUv1(packedOverlay >> 4 & 65535, packedOverlay >> 20 & 65535);
+        this.setUv1(packedOverlay & 65535, packedOverlay >>> 16 & 65535);
     }
 
     /**

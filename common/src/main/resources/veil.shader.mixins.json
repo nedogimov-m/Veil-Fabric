@@ -2,16 +2,19 @@
   "required": true,
   "minVersion": "0.8",
   "package": "foundry.veil.mixin.shader",
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_25",
   "plugin": "foundry.veil.VeilMixinPluginImpl",
   "client": [
-    "client.ShaderEffectInstanceMixin",
-    "client.ShaderGameRendererMixin",
-    "client.ShaderInstanceMixin",
-    "client.ShaderProgramManagerMixin"
+    "client.NativePipelineCacheMixin",
+    "client.NativeShaderManagerMixin",
+    "client.NativeBootstrapShaderSourceMixin",
+    "client.NativeFrontendRenderPassMixin",
+    "client.NativeShaderEncoderMixin",
+    "client.NativeShaderFrameMixin",
+    "client.NativeShaderWorldViewMixin",
+    "client.NativeShaderGuiViewMixin"
   ],
   "injectors": {
     "defaultRequire": 1
   }
 }
-  

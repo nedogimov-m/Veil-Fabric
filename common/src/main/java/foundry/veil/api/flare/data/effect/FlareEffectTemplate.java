@@ -5,7 +5,7 @@ import foundry.veil.api.client.render.MatrixStack;
 import foundry.veil.api.flare.EffectHost;
 import foundry.veil.api.flare.model.BakedShell;
 import foundry.veil.api.util.CodecUtil;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -47,7 +47,7 @@ public record FlareEffectTemplate(FlareEffectLayer[] effectLayers, FlareEffectLa
         this.render(host, matrixStack, partialTick, null);
     }
 
-    public void render(EffectHost host, MatrixStack matrixStack, float partialTick, @Nullable Map<ResourceLocation, BakedShell> shellOverrides) {
+    public void render(EffectHost host, MatrixStack matrixStack, float partialTick, @Nullable Map<Identifier, BakedShell> shellOverrides) {
         for (FlareEffectLayer effectLayer : this.activeEffectLayers) {
             effectLayer.render(host, matrixStack, partialTick, shellOverrides);
         }

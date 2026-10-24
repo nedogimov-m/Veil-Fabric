@@ -1,323 +1,109 @@
 package foundry.veil.api.client.render.light.renderer;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.*;
-import foundry.veil.Veil;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.blaze3d.vertex.ByteBufferBuilder;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import com.mojang.renderpearl.api.textures.GpuSampler;
 import foundry.veil.api.client.render.CullFrustum;
-import foundry.veil.api.client.render.MatrixStack;
-import foundry.veil.api.client.render.VeilRenderBridge;
-import foundry.veil.api.client.render.VeilRenderSystem;
 import foundry.veil.api.client.render.light.InstancedLightData;
-import foundry.veil.api.client.render.light.LightGuideProvider;
 import foundry.veil.api.client.render.light.data.LightData;
 import foundry.veil.api.client.render.vertex.VertexArray;
-import foundry.veil.api.client.render.vertex.VertexArrayBuilder;
-import foundry.veil.impl.client.editor.LightInspector;
-import net.minecraft.client.Camera;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.resources.Identifier;
+import org.joml.Vector3f;
+import org.joml.Vector3fc;
 import org.jetbrains.annotations.Nullable;
-import org.joml.Matrix4fStack;
-import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
-import static org.lwjgl.opengl.GL15C.*;
-import static org.lwjgl.system.MemoryUtil.memAddress;
-
-/**
- * Draws lights as instanced quads in the scene.
- *
- * @param <T> The type of lights to render
- * @author Ocelot
- */
-public abstract class InstancedLightRenderer<T extends LightData & InstancedLightData> implements InscatteringLightRenderer<T> {
-
-    private static final int MAX_UPLOADS = 400;
-
+/** Native instanced storage; each replacement survives all recorded mesh leases. */
+public abstract class InstancedLightRenderer<T extends LightData & InstancedLightData> implements LightTypeRenderer<T> {
     protected final int lightSize;
-    protected int maxLights;
-
-    private final List<LightHandle> lights;
-    private final List<LightHandle> visibleLights;
-    private final List<LightHandle> lastVisibleLights;
-    private final VertexArray vertexArray;
-    private final int instancedVbo;
-
+    private final List<LightHandle> lights = new ArrayList<>();
+    private final List<LightHandle> visible = new ArrayList<>();
+    private final List<LightHandle> uploaded = new ArrayList<>();
+    private final VertexArray mesh;
     private boolean freed;
+    private boolean forceUpload = true;
+    private @Nullable GpuTextureView voxelGrid;
+    private @Nullable GpuSampler voxelSampler;
+    private final Vector3f voxelOrigin = new Vector3f();
 
-    /**
-     * Creates a new instanced light renderer with a resizeable light buffer.
-     *
-     * @param lightSize The size of each light in bytes
-     */
-    public InstancedLightRenderer(int lightSize) {
+    protected InstancedLightRenderer(int lightSize) {
         this.lightSize = lightSize;
-        this.maxLights = 0;
-        this.lights = new ArrayList<>();
-        this.visibleLights = new ArrayList<>();
-        this.lastVisibleLights = new ArrayList<>();
-        this.vertexArray = VertexArray.create();
-
-        MeshData mesh = this.createMesh();
-        this.vertexArray.upload(mesh, VertexArray.DrawUsage.STATIC);
-        this.instancedVbo = this.vertexArray.getOrCreateBuffer(2);
-
-        VertexArrayBuilder builder = this.vertexArray.editFormat();
-        builder.defineVertexBuffer(2, this.instancedVbo, 0, this.lightSize, 1);
-        this.setupBufferState(builder);
+        this.mesh = VertexArray.create();
+        var encoder = RenderSystem.getDevice().createCommandEncoder();
+        try (var storage = new ByteBufferBuilder(256)) {
+            var builder = new BufferBuilder(storage, PrimitiveTopology.TRIANGLE_STRIP, DefaultVertexFormat.POSITION);
+            this.createMesh(builder);
+            this.mesh.upload(encoder, builder.buildOrThrow(), VertexArray.DrawUsage.STATIC); encoder.submit();
+        }
+        catch (RuntimeException | Error failure) { this.mesh.close(); throw failure; }
     }
+    protected abstract void createMesh(VertexConsumer builder);
+    protected abstract VertexFormat instanceFormat();
+    protected abstract Identifier shader();
+    protected void storeInstance(T light, ByteBuffer buffer) { light.store(buffer); }
 
-    /**
-     * @return The mesh data each instanced light will be rendered with use
-     */
-    protected abstract MeshData createMesh();
-
-    /**
-     * Sets up the instanced buffer state.
-     */
-    protected abstract void setupBufferState(VertexArrayBuilder builder);
-
-    /**
-     * Calculates the render type to use for the specified lights.
-     *
-     * @param lights All lights in the order they are in the instanced buffer
-     * @return The render type to use
-     */
-    protected abstract @Nullable RenderType getRenderType(List<? extends LightRenderHandle<T>> lights);
-
-    /**
-     * Calculates the render type to use for the specified lights' in-scattering.
-     *
-     * @param lights All lights in the order they are in the instanced buffer
-     * @return The render type to use for in-scattering
-     */
-    protected abstract @Nullable RenderType getInscatteringRenderType(List<? extends LightRenderHandle<T>> lights);
-
-    private void updateAllLights() {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            int pointer = 0;
-            long offset = 0;
-            ByteBuffer dataBuffer = stack.malloc(Math.min(MAX_UPLOADS, this.visibleLights.size()) * this.lightSize);
-            for (LightHandle handle : this.visibleLights) {
-                dataBuffer.position((pointer++) * this.lightSize);
-                handle.data.store(dataBuffer);
-                handle.uploadedRevision = handle.data.getRevision();
-                if (pointer >= MAX_UPLOADS) {
-                    dataBuffer.rewind();
-                    glBufferSubData(GL_ARRAY_BUFFER, offset, dataBuffer);
-                    offset += dataBuffer.capacity();
-                    pointer = 0;
-                }
-            }
-
-            if (pointer > 0) {
-                dataBuffer.rewind();
-                nglBufferSubData(GL_ARRAY_BUFFER, offset, (long) pointer * this.lightSize, memAddress(dataBuffer));
-            }
-        }
+    public final void setVoxelGrid(GpuTextureView view, GpuSampler sampler, Vector3fc origin) {
+        this.voxelGrid = Objects.requireNonNull(view); this.voxelSampler = Objects.requireNonNull(sampler); this.voxelOrigin.set(origin);
     }
-
-    private void updateDirtyLights() {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            ByteBuffer dataBuffer = stack.malloc(this.lightSize);
-            for (int i = 0; i < this.visibleLights.size(); i++) {
-                LightHandle handle = this.visibleLights.get(i);
-                long revision = handle.data.getRevision();
-                if (handle.uploadedRevision == revision) {
-                    continue;
-                }
-
-                dataBuffer.clear();
-                handle.data.store(dataBuffer);
-                dataBuffer.rewind();
-                nglBufferSubData(GL_ARRAY_BUFFER, (long) i * this.lightSize, this.lightSize, memAddress(dataBuffer));
-                handle.uploadedRevision = revision;
-            }
-        }
+    @Override public LightRenderHandle<T> addLight(T light) {
+        if (this.freed) throw new IllegalStateException("Light renderer is retired");
+        var handle = new LightHandle(Objects.requireNonNull(light)); this.lights.add(handle); return handle;
     }
-
-    private boolean visibleLightsChanged() {
-        if (this.visibleLights.size() != this.lastVisibleLights.size()) {
-            return true;
-        }
-
-        for (int i = 0; i < this.visibleLights.size(); i++) {
-            if (this.visibleLights.get(i) != this.lastVisibleLights.get(i)) {
-                return true;
-            }
-        }
-
-        return false;
+    @Override public LightRenderHandle<T> steal(LightRenderHandle<T> handle) {
+        if (this.lights.contains(handle) && handle.isValid()) return handle;
+        T data = handle.getLightData(); handle.free(); return this.addLight(data);
     }
-
-    @Override
-    public LightRenderHandle<T> addLight(T light) {
-        LightHandle handle = new LightHandle(light);
-        this.lights.add(handle);
-        return handle;
+    @Override public void prepareLights(LightRenderer owner, CullFrustum frustum) {
+        this.visible.clear();
+        for (var handle : this.lights) if (handle.data.isVisible(frustum)) this.visible.add(handle);
     }
-
-    @Override
-    public LightRenderHandle<T> steal(LightRenderHandle<T> handle) {
-        if (!(handle instanceof LightHandle)) {
-            handle.free();
-            return this.addLight(handle.getLightData());
-        }
-        return handle;
-    }
-
-    @Override
-    public void prepareLights(LightRenderer lightRenderer, CullFrustum frustum) {
-        this.visibleLights.clear();
-        for (LightHandle light : this.lights) {
-            if (light.data.isVisible(frustum)) {
-                this.visibleLights.add(light);
-            }
-        }
-    }
-
-    private void updateInstancedData() {
-        RenderSystem.glBindBuffer(GL_ARRAY_BUFFER, this.instancedVbo);
-
-        boolean resized = false;
-
-        // If there is no space, then resize
-        if (this.visibleLights.size() > this.maxLights) {
-            if (this.maxLights < 100) {
-                this.maxLights = 100;
-            } else {
-                this.maxLights = (int) Math.max(Math.ceil(this.maxLights / 2.0), this.visibleLights.size() * 1.5);
-            }
-            glBufferData(GL_ARRAY_BUFFER, (long) this.maxLights * this.lightSize, GL_STREAM_DRAW);
-            resized = true;
-        }
-
-        if (resized || this.visibleLightsChanged()) {
-            this.updateAllLights();
-            this.lastVisibleLights.clear();
-            this.lastVisibleLights.addAll(this.visibleLights);
-        } else {
-            this.updateDirtyLights();
-        }
-
-        this.vertexArray.bind();
-    }
-
-    @Override
-    public void renderLights(LightRenderer lightRenderer) {
-        if (this.visibleLights.isEmpty()) {
-            return;
-        }
-
-        RenderType renderType = this.getRenderType(this.visibleLights);
-        if (renderType == null) {
-            return;
-        }
-
-        RenderSystem.glBindBuffer(GL_ARRAY_BUFFER, this.instancedVbo);
-        this.updateInstancedData();
-        this.vertexArray.bind();
-        this.vertexArray.drawInstancedWithRenderType(renderType, this.visibleLights.size());
-
-        // Render light guides
-        if (Veil.IMGUIMC) {
-            RenderSystem.setProjectionMatrix(VeilRenderSystem.renderer().getCameraMatrices().getProjectionMatrix(), VertexSorting.DISTANCE_TO_ORIGIN);
-            Matrix4fStack stack = RenderSystem.getModelViewStack();
-            stack.pushMatrix();
-            stack.set(VeilRenderSystem.renderer().getCameraMatrices().getViewMatrix());
-            RenderSystem.applyModelViewMatrix();
-            Camera camera = Minecraft.getInstance().gameRenderer.getMainCamera();
-            MatrixStack matrixStack = VeilRenderBridge.create(new PoseStack());
-            matrixStack.matrixPush();
-            matrixStack.translate(-camera.getPosition().x, -camera.getPosition().y, -camera.getPosition().z);
-
-            for (LightHandle handle : this.lights) {
-                if (VeilRenderSystem.renderer().getEditorManager().isVisible(i -> i instanceof LightInspector) && handle.getLightData() instanceof LightGuideProvider) {
-                    RenderType debugRenderType = RenderType.debugLineStrip(1);
-                    ByteBufferBuilder bytebufferbuilder = new ByteBufferBuilder(debugRenderType.bufferSize());
-                    BufferBuilder builder = new BufferBuilder(bytebufferbuilder, debugRenderType.mode(), debugRenderType.format());
-                    ((LightGuideProvider) handle.getLightData()).renderLightGuide(matrixStack, builder);
-                    MeshData meshData = builder.build();
-                    if (meshData != null) {
-                        if (renderType.sortOnUpload()) {
-                            ByteBufferBuilder sortBufferBuilder = new ByteBufferBuilder(renderType.bufferSize());
-                            meshData.sortQuads(sortBufferBuilder, RenderSystem.getVertexSorting());
-                        }
-
-                        debugRenderType.draw(meshData);
+    @Override public void renderLights(LightRenderer owner) {
+        if (this.visible.isEmpty()) return;
+        boolean changed = this.forceUpload || !this.uploaded.equals(this.visible);
+        if (!changed) for (var light : this.visible) if (light.revision != light.data.getRevision()) { changed = true; break; }
+        var encoder = RenderSystem.getDevice().createCommandEncoder();
+        try {
+            if (changed) {
+                ByteBuffer bytes = MemoryUtil.memAlloc(Math.multiplyExact(this.visible.size(), this.lightSize));
+                try {
+                    for (var light : this.visible) {
+                        int offset = bytes.position(); this.storeInstance(light.data, bytes);
+                        if (bytes.position() != offset + this.lightSize) throw new IllegalStateException("Incorrect native light instance stride");
                     }
-                }
+                    bytes.flip(); this.mesh.uploadVertexBuffer(encoder, VertexArray.INSTANCE_BUFFER, bytes, this.instanceFormat(), VertexArray.DrawUsage.STREAM);
+                } finally { MemoryUtil.memFree(bytes); }
             }
-            matrixStack.matrixPop();
-            stack.popMatrix();
-            RenderSystem.applyModelViewMatrix();
-        }
+            owner.draw(encoder, this.shader(), this.mesh, this.visible.size(), true, program -> {
+                if (this.voxelGrid != null) DDALightRenderer.uploadVoxelGridUniforms(program, this.voxelGrid, this.voxelSampler, this.voxelOrigin);
+            });
+            this.uploaded.clear(); this.uploaded.addAll(this.visible);
+            for (var light : this.visible) light.revision = light.data.getRevision();
+            this.forceUpload = false;
+        } catch (RuntimeException | Error failure) { this.forceUpload = true; throw failure; }
     }
-
-    @Override
-    public void renderLightInscattering(LightRenderer lightRenderer) {
-        if (this.visibleLights.isEmpty()) {
-            return;
-        }
-
-        RenderType renderType = this.getInscatteringRenderType(this.visibleLights);
-        if (renderType == null) {
-            return;
-        }
-
-        RenderSystem.glBindBuffer(GL_ARRAY_BUFFER, this.instancedVbo);
-        this.vertexArray.bind();
-        this.vertexArray.drawInstancedWithRenderType(renderType, this.visibleLights.size());
+    @Override public List<? extends LightRenderHandle<T>> getLights() { return Collections.unmodifiableList(this.lights); }
+    @Override public int getVisibleLights() { return this.visible.size(); }
+    @Override public void free() {
+        if (this.freed) return; this.freed = true; this.mesh.close();
+        this.lights.clear(); this.visible.clear(); this.uploaded.clear();
     }
-
-    @Override
-    public List<? extends LightRenderHandle<T>> getLights() {
-        return this.lights;
-    }
-
-    @Override
-    public int getVisibleLights() {
-        return this.visibleLights.size();
-    }
-
-    @Override
-    public void free() {
-        this.vertexArray.free();
-        this.freed = true;
-    }
-
-    private class LightHandle implements LightRenderHandle<T> {
-
+    private final class LightHandle implements LightRenderHandle<T> {
         private final T data;
-        private long uploadedRevision;
-
-        private LightHandle(T data) {
-            this.data = data;
-            this.uploadedRevision = data.getRevision() - 1;
-        }
-
-        @Override
-        public T getLightData() {
-            return this.data;
-        }
-
-        @Override
-        public void markDirty() {
-            this.data.markDirty();
-        }
-
-        @Override
-        public boolean isValid() {
-            return !InstancedLightRenderer.this.freed;
-        }
-
-        @Override
-        public void free() {
-            InstancedLightRenderer.this.lights.remove(this);
-            InstancedLightRenderer.this.lastVisibleLights.remove(this);
-        }
+        private long revision = Long.MIN_VALUE;
+        private boolean removed;
+        private LightHandle(T data) { this.data = data; }
+        @Override public T getLightData() { return this.data; }
+        @Override public void markDirty() { this.data.markDirty(); }
+        @Override public boolean isValid() { return !freed && !this.removed; }
+        @Override public void free() { if (this.removed) return; this.removed = true; lights.remove(this); visible.remove(this); forceUpload = true; }
     }
 }

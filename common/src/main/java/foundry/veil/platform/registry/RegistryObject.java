@@ -2,7 +2,7 @@ package foundry.veil.platform.registry;
 
 import net.minecraft.core.Holder;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.util.function.Supplier;
 
@@ -25,8 +25,8 @@ public interface RegistryObject<T> extends Supplier<T> {
      *
      * @return the id of the object
      */
-    default ResourceLocation getId() {
-        return this.getResourceKey().location();
+    default Identifier getId() {
+        return this.getResourceKey().identifier();
     }
 
     /**

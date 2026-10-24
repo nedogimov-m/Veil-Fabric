@@ -39,6 +39,8 @@ public abstract class Skeleton {
 
     public void buildRoots() {
         this.maxDepth = 0;
+        this.roots.clear();
+        this.bones.values().forEach(part -> part.parentChain.clear());
         for (Bone part : this.bones.values()) {
             if (part.parent == null) {
                 this.roots.add(part);

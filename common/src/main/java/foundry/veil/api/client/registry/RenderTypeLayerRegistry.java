@@ -1,13 +1,12 @@
 package foundry.veil.api.client.registry;
 
 import com.mojang.serialization.MapCodec;
-import foundry.veil.Veil;
 import foundry.veil.api.client.render.rendertype.layer.*;
 import foundry.veil.platform.registry.RegistrationProvider;
 import foundry.veil.platform.registry.RegistryObject;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -15,14 +14,14 @@ import org.jetbrains.annotations.ApiStatus;
  */
 public final class RenderTypeLayerRegistry {
 
-    public static final ResourceKey<Registry<LayerType<?>>> REGISTRY_KEY = ResourceKey.createRegistryKey(Veil.veilPath("render_type_layer"));
-    private static final RegistrationProvider<LayerType<?>> VANILLA_PROVIDER = RegistrationProvider.get(REGISTRY_KEY, Veil.MODID);
+    public static final ResourceKey<Registry<LayerType<?>>> REGISTRY_KEY = ResourceKey.createRegistryKey(veilPath("render_type_layer"));
+    private static final RegistrationProvider<LayerType<?>> VANILLA_PROVIDER = RegistrationProvider.get(REGISTRY_KEY, "veil");
     public static final Registry<LayerType<?>> REGISTRY = VANILLA_PROVIDER.asVanillaRegistry();
 
     public static final RegistryObject<LayerType<TextureLayer>> TEXTURE = register("texture", TextureLayer.CODEC);
     public static final RegistryObject<LayerType<MultiTextureLayer>> MULTI_TEXTURE = register("multi_texture", MultiTextureLayer.CODEC);
     public static final RegistryObject<LayerType<VanillaShaderLayer>> VANILLA_SHADER = register("shader", VanillaShaderLayer.CODEC);
-    public static final RegistryObject<LayerType<VeilShaderLayer>> VEIL_SHADER = register(Veil.veilPath("shader"), VeilShaderLayer.CODEC);
+    public static final RegistryObject<LayerType<VeilShaderLayer>> VEIL_SHADER = register(veilPath("shader"), VeilShaderLayer.CODEC);
     public static final RegistryObject<LayerType<TransparencyLayer>> TRANSPARENCY = register("transparency", TransparencyLayer.CODEC);
     public static final RegistryObject<LayerType<DepthTestLayer>> DEPTH_TEST = register("depth_test", DepthTestLayer.CODEC);
     public static final RegistryObject<LayerType<CullLayer>> CULL = register("cull", CullLayer.CODEC);
@@ -34,10 +33,12 @@ public final class RenderTypeLayerRegistry {
     public static final RegistryObject<LayerType<WriteMaskLayer>> WRITE_MASK = register("write_mask", WriteMaskLayer.CODEC);
     public static final RegistryObject<LayerType<LineLayer>> LINE = register("line", LineLayer.CODEC);
     public static final RegistryObject<LayerType<ColorLogicLayer>> COLOR_LOGIC = register("color_logic", ColorLogicLayer.CODEC);
-    public static final RegistryObject<LayerType<PatchesLayer>> PATCHES = register(Veil.veilPath("patches"), PatchesLayer.CODEC);
-    public static final RegistryObject<LayerType<DepthClampLayer>> DEPTH_CLAMP = register(Veil.veilPath("depth_clamp"), DepthClampLayer.CODEC);
-    public static final RegistryObject<LayerType<MultisampleLayer>> MULTISAMPLE = register(Veil.veilPath("multisample"), MultisampleLayer.CODEC);
-    public static final RegistryObject<LayerType<SeamlessCubemapLayer>> SEAMLESS_CUBEMAP = register(Veil.veilPath("seamless_cubemap"), SeamlessCubemapLayer.CODEC);
+    public static final RegistryObject<LayerType<PatchesLayer>> PATCHES = register(veilPath("patches"), PatchesLayer.CODEC);
+    public static final RegistryObject<LayerType<DepthClampLayer>> DEPTH_CLAMP = register(veilPath("depth_clamp"), DepthClampLayer.CODEC);
+    public static final RegistryObject<LayerType<MultisampleLayer>> MULTISAMPLE = register(veilPath("multisample"), MultisampleLayer.CODEC);
+    public static final RegistryObject<LayerType<SeamlessCubemapLayer>> SEAMLESS_CUBEMAP = register(veilPath("seamless_cubemap"), SeamlessCubemapLayer.CODEC);
+
+    private static Identifier veilPath(String path) { return Identifier.fromNamespaceAndPath("veil", path); }
 
     private RenderTypeLayerRegistry() {
     }
@@ -47,10 +48,10 @@ public final class RenderTypeLayerRegistry {
     }
 
     private static <T extends RenderTypeLayer> RegistryObject<LayerType<T>> register(String name, MapCodec<T> codec) {
-        return VANILLA_PROVIDER.register(ResourceLocation.withDefaultNamespace(name), () -> new LayerType<>(codec));
+        return VANILLA_PROVIDER.register(Identifier.withDefaultNamespace(name), () -> new LayerType<>(codec));
     }
 
-    private static <T extends RenderTypeLayer> RegistryObject<LayerType<T>> register(ResourceLocation id, MapCodec<T> codec) {
+    private static <T extends RenderTypeLayer> RegistryObject<LayerType<T>> register(Identifier id, MapCodec<T> codec) {
         return VANILLA_PROVIDER.register(id, () -> new LayerType<>(codec));
     }
 

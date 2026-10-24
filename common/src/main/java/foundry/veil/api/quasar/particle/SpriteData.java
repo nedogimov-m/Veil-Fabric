@@ -2,10 +2,10 @@ package foundry.veil.api.quasar.particle;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.joml.Vector4f;
 
-public record SpriteData(ResourceLocation sprite,
+public record SpriteData(Identifier sprite,
                          int frameCount,
                          float frameTime,
                          int frameWidth,
@@ -13,7 +13,7 @@ public record SpriteData(ResourceLocation sprite,
                          boolean stretchToLifetime) {
 
     public static final Codec<SpriteData> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-            ResourceLocation.CODEC.fieldOf("sprite").forGetter(SpriteData::sprite),
+            Identifier.CODEC.fieldOf("sprite").forGetter(SpriteData::sprite),
             Codec.INT.optionalFieldOf("frame_count", 1).forGetter(SpriteData::frameCount),
             Codec.FLOAT.optionalFieldOf("frame_time", 1.0F).forGetter(SpriteData::frameTime),
             Codec.INT.optionalFieldOf("frame_width", 1).forGetter(SpriteData::frameWidth),

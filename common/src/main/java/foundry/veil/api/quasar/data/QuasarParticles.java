@@ -8,7 +8,6 @@ import foundry.veil.api.quasar.data.module.ModuleType;
 import foundry.veil.api.quasar.data.module.ParticleModuleData;
 import foundry.veil.api.quasar.particle.ParticleEmitter;
 import foundry.veil.api.resource.VeilDynamicRegistry;
-import foundry.veil.impl.flare.FlareManager;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
@@ -33,13 +32,13 @@ public final class QuasarParticles {
     public static final ResourceKey<Registry<EmitterShapeSettings>> EMITTER_SHAPE_SETTINGS = createRegistryKey("quasar/modules/emitter/shape");
     public static final ResourceKey<Registry<ParticleEmitterData>> EMITTER = createRegistryKey("quasar/emitters");
 
-    private static final SuggestionProvider<?> EMITTER_SUGGESTION_PROVIDER = (unused, builder) -> registryAccess().registry(EMITTER).map(registry -> SharedSuggestionProvider.suggestResource(registry.keySet(), builder)).orElseGet(Suggestions::empty);
+    private static final SuggestionProvider<?> EMITTER_SUGGESTION_PROVIDER = (unused, builder) -> registryAccess().lookup(EMITTER).map(registry -> SharedSuggestionProvider.suggestResource(registry.keySet(), builder)).orElseGet(Suggestions::empty);
     private static final List<RegistryDataLoader.RegistryData<?>> REGISTRIES = List.of(
-            new RegistryDataLoader.RegistryData<>(MODULES, ParticleModuleData.DIRECT_CODEC, false),
-            new RegistryDataLoader.RegistryData<>(PARTICLE_DATA, QuasarParticleData.DIRECT_CODEC, false),
-            new RegistryDataLoader.RegistryData<>(PARTICLE_SETTINGS, ParticleSettings.DIRECT_CODEC, false),
-            new RegistryDataLoader.RegistryData<>(EMITTER_SHAPE_SETTINGS, EmitterShapeSettings.DIRECT_CODEC, false),
-            new RegistryDataLoader.RegistryData<>(EMITTER, ParticleEmitterData.DIRECT_CODEC, false)
+            new RegistryDataLoader.RegistryData<>(MODULES, ParticleModuleData.DIRECT_CODEC, net.minecraft.resources.RegistryValidator.none()),
+            new RegistryDataLoader.RegistryData<>(PARTICLE_DATA, QuasarParticleData.DIRECT_CODEC, net.minecraft.resources.RegistryValidator.none()),
+            new RegistryDataLoader.RegistryData<>(PARTICLE_SETTINGS, ParticleSettings.DIRECT_CODEC, net.minecraft.resources.RegistryValidator.none()),
+            new RegistryDataLoader.RegistryData<>(EMITTER_SHAPE_SETTINGS, EmitterShapeSettings.DIRECT_CODEC, net.minecraft.resources.RegistryValidator.none()),
+            new RegistryDataLoader.RegistryData<>(EMITTER, ParticleEmitterData.DIRECT_CODEC, net.minecraft.resources.RegistryValidator.none())
     );
     private static RegistryAccess registryAccess = RegistryAccess.EMPTY;
 
@@ -67,13 +66,9 @@ public final class QuasarParticles {
     @ApiStatus.Internal
     public static class Reloader implements PreparableReloadListener {
 
-        public static final Reloader INSTANCE = new Reloader();
-
-        private Reloader() {
-        }
-
         @Override
-        public @NotNull CompletableFuture<Void> reload(PreparationBarrier preparationBarrier, @NotNull ResourceManager resourceManager, @NotNull ProfilerFiller preparationsProfiler, @NotNull ProfilerFiller reloadProfiler, @NotNull Executor backgroundExecutor, @NotNull Executor gameExecutor) {
+        public @NotNull CompletableFuture<Void> reload(SharedState shared, @NotNull Executor backgroundExecutor, PreparationBarrier preparationBarrier, @NotNull Executor gameExecutor) {
+            ResourceManager resourceManager = shared.resourceManager();
             return VeilDynamicRegistry.loadRegistries(resourceManager, REGISTRIES, backgroundExecutor)
                     .thenCompose(preparationBarrier::wait)
                     .thenAcceptAsync(data -> {
@@ -85,8 +80,8 @@ public final class QuasarParticles {
                             Veil.LOGGER.error("Quasar registry loading errors:{}", msg);
                         }
 
-                        Registry<ParticleModuleData> modulesRegistry = registryAccess.registryOrThrow(MODULES);
-                        for (Map.Entry<ResourceKey<ParticleModuleData>, ParticleModuleData> entry : modulesRegistry.entrySet()) {
+                        var modules = registryAccess.lookup(MODULES);
+                        for (Map.Entry<ResourceKey<ParticleModuleData>, ParticleModuleData> entry : modules.map(Registry::entrySet).orElse(java.util.Set.of())) {
                             ParticleModuleData moduleData = entry.getValue();
                             ModuleType.DeprecationStatus status = moduleData.getType().deprecationStatus();
                             if (status != null) {
@@ -98,7 +93,7 @@ public final class QuasarParticles {
                             }
                         }
 
-                        Veil.LOGGER.info("Loaded {} quasar particles", registryAccess.registryOrThrow(EMITTER).size());
+                        registryAccess.lookup(EMITTER).ifPresent(registry -> Veil.LOGGER.info("Loaded {} quasar particles", registry.size()));
                         VeilRenderSystem.renderer().getParticleManager().clear();
                     }, gameExecutor);
         }

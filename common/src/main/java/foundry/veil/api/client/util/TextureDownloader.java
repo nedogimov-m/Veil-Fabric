@@ -1,118 +1,75 @@
 package foundry.veil.api.client.util;
 
-import net.minecraft.Util;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import foundry.veil.api.client.render.texture.ArrayTexture;
+import foundry.veil.api.client.render.texture.CubemapTexture;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.AbstractTexture;
-import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
-import org.lwjgl.system.MemoryUtil;
-
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.Util;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.nio.file.*;
+import java.util.*;
+import java.util.concurrent.*;
 
-import static org.lwjgl.opengl.GL11C.*;
-import static org.lwjgl.opengl.GL12C.GL_TEXTURE_BASE_LEVEL;
-import static org.lwjgl.opengl.GL12C.GL_TEXTURE_MAX_LEVEL;
-import static org.lwjgl.stb.STBImageWrite.stbi_flip_vertically_on_write;
-import static org.lwjgl.stb.STBImageWrite.stbi_write_png;
-
-/**
- * Properly downloads textures from OpenGL and writes them to a file asynchronously.
- *
- * @author Ocelot
- */
+/** Native sampled snapshots followed by asynchronous PNG encoding; source resources remain caller-owned. */
 public final class TextureDownloader {
-
-    private TextureDownloader() {
+    private TextureDownloader(){}
+    public static CompletableFuture<?> save(String name,Path outputFolder,AbstractTexture texture,boolean flip){
+        return save(name,outputFolder,texture.getTextureView(),texture instanceof CubemapTexture?NativeTexturePreview.Projection.CUBEMAP_FACE:
+                texture instanceof ArrayTexture?NativeTexturePreview.Projection.ARRAY:NativeTexturePreview.Projection.TEXTURE_2D,flip);
     }
-
-    /**
-     * Writes the specified texture to file with the specified name. If the texture specifies mipmap levels, then the file name will be <code>name-#.png</code>.
-     *
-     * @param name         The name of the file to save to
-     * @param outputFolder The folder to place the file in
-     * @param texture      The id of the texture to download
-     * @param flip         Whether to flip the image on write
-     * @return A future for when all texture levels have been downloaded and saved
-     */
-    public static CompletableFuture<?> save(String name, Path outputFolder, int texture, boolean flip) {
-        glBindTexture(GL_TEXTURE_2D, texture);
-        int base = glGetTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL);
-        int max = glGetTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL);
-        if (max == 1000) {
-            max = 0;
-        }
-
-        List<CompletableFuture<?>> result = new ArrayList<>(max - base + 1);
-        for (int level = base; level <= max; level++) {
-            Path outputFile = outputFolder.resolve(name + (base == max ? "" : "-" + level) + ".png");
-            if (!Files.exists(outputFile)) {
-                try {
-                    Files.createFile(outputFile);
-                } catch (Exception e) {
-                    result.add(CompletableFuture.failedFuture(e));
-                    continue;
-                }
+    public static CompletableFuture<?> save(String name,Path outputFolder,Identifier texture,boolean flip){
+        return save(name,outputFolder,Minecraft.getInstance().getTextureManager().getTexture(texture),flip);
+    }
+    public static CompletableFuture<?> save(String name,Path outputFolder,GpuTextureView texture,boolean flip){
+        final var projection=(texture.texture().usage()&com.mojang.renderpearl.api.textures.GpuTexture.USAGE_CUBEMAP_COMPATIBLE)!=0?NativeTexturePreview.Projection.CUBEMAP_FACE:
+                texture.texture().getDepthOrLayers()>1?NativeTexturePreview.Projection.ARRAY:NativeTexturePreview.Projection.TEXTURE_2D;
+        return save(name,outputFolder,texture,projection,flip);
+    }
+    /** Explicit projection keeps single-layer native array views distinct from ordinary 2D views. */
+    public static CompletableFuture<?> save(String name,Path outputFolder,GpuTextureView texture,NativeTexturePreview.Projection projection,boolean flip){
+        RenderSystem.assertOnRenderThread();final var device=RenderSystem.getDevice();
+        final int layers=switch(projection){case CUBEMAP,CUBEMAP_FACE->6;case ARRAY->texture.texture().getDepthOrLayers();default->1;};
+        final var actual=projection==NativeTexturePreview.Projection.CUBEMAP?NativeTexturePreview.Projection.CUBEMAP_FACE:projection;
+        final var pending=new ArrayList<CompletableFuture<?>>();final String safeName=safeName(name);
+        try(var preview=new NativeTexturePreview(device)){
+            for(int layer=0;layer<layers;layer++)for(int mip=0;mip<texture.mipLevels();mip++){
+                final var image=preview.render(texture,actual,layer,mip);final int width=image.getWidth(0),height=image.getHeight(0);
+                final byte[] rgba=readRgba(image);final String suffix=(layers>1?"-layer"+layer:"")+(texture.mipLevels()>1?"-"+mip:"");
+                final Path path=outputFolder.resolve(safeName+suffix+".png");
+                pending.add(CompletableFuture.runAsync(()->write(path,width,height,rgba,flip),Util.ioPool()));
             }
-
-            int width = glGetTexLevelParameteri(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH);
-            int height = glGetTexLevelParameteri(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT);
-            int format = glGetTexLevelParameteri(GL_TEXTURE_2D, level, GL_TEXTURE_INTERNAL_FORMAT);
-
-            boolean floating = format == GL_DEPTH_COMPONENT;
-            int components = floating ? 1 : 4;
-            ByteBuffer image = MemoryUtil.memAlloc(width * height * components);
-            glGetTexImage(GL_TEXTURE_2D, level, floating ? GL_DEPTH_COMPONENT : GL_RGBA, GL_UNSIGNED_BYTE, image);
-
-            CompletableFuture<?> future = CompletableFuture.runAsync(() ->
-            {
-                if (flip) {
-                    stbi_flip_vertically_on_write(true);
-                }
-                boolean success = stbi_write_png(outputFile.toString(), width, height, components, image, 0);
-                if (flip) {
-                    stbi_flip_vertically_on_write(false);
-                }
-                MemoryUtil.memFree(image);
-                if (!success) {
-                    throw new CompletionException(new IOException("Failed to write image to: " + outputFile));
-                }
-            }, Util.ioPool());
-            result.add(future);
         }
-        return CompletableFuture.allOf(result.toArray(CompletableFuture[]::new));
+        return CompletableFuture.allOf(pending.toArray(CompletableFuture[]::new));
     }
-
-    /**
-     * Writes the specified texture to file with the specified name. If the texture specifies mipmap levels, then the file name will be <code>name-#.png</code>.
-     *
-     * @param name         The name of the file to save to
-     * @param outputFolder The folder to place the file in
-     * @param texture      The texture object to download
-     * @param flip         Whether to flip the image on write
-     * @return A future for when all texture levels have been downloaded and saved
-     */
-    public static CompletableFuture<?> save(String name, Path outputFolder, AbstractTexture texture, boolean flip) {
-        return save(name, outputFolder, texture.getId(), flip);
+    /** Capture before return; callers may retire/resize textures while PNG encoding runs. */
+    public static byte[] readRgba(GpuTextureView image){
+        final var texture=image.texture();
+        if(texture.getFormat()!=com.mojang.renderpearl.api.GpuFormat.RGBA8_UNORM||image.mipLevels()!=1||texture.getDepthOrLayers()!=1)
+            throw new IllegalArgumentException("PNG capture requires one native RGBA8 preview image");
+        final int size=Math.multiplyExact(Math.multiplyExact(image.getWidth(0),image.getHeight(0)),4);final var device=RenderSystem.getDevice();
+        try(var buffer=device.createBuffer(()->"Veil native PNG snapshot",GpuBuffer.USAGE_COPY_DST|GpuBuffer.USAGE_MAP_READ,size)){
+            final var encoder=device.createCommandEncoder();encoder.copyTextureToBuffer(texture,buffer,0,()->{},image.baseMipLevel());
+            try(var fence=encoder.createFence()){
+                encoder.submit();if(!fence.awaitCompletion(10_000_000_000L))throw new IllegalStateException("Native PNG readback timed out");
+                try(var mapped=buffer.map(true,false)){final byte[] rgba=new byte[size];mapped.data().get(rgba);return rgba;}
+            }
+        }
     }
-
-    /**
-     * Writes the specified texture to file with the specified name. If the texture specifies mipmap levels, then the file name will be <code>name-#.png</code>. The missing texture will be written if there is no texture with that id.
-     *
-     * @param name         The name of the file to save to
-     * @param outputFolder The folder to place the file in
-     * @param texture      The id of the registered texture object
-     * @param flip         Whether to flip the image on write
-     * @return A future for when all texture levels have been downloaded and saved
-     */
-    public static CompletableFuture<?> save(String name, Path outputFolder, ResourceLocation texture, boolean flip) {
-        AbstractTexture abstractTexture = Minecraft.getInstance().getTextureManager().getTexture(texture);
-        return save(name, outputFolder, abstractTexture != null ? abstractTexture : MissingTextureAtlasSprite.getTexture(), flip);
+    private static String safeName(String name){final String safe=name.replaceAll("[^A-Za-z0-9._-]","_");return safe.isBlank()||safe.equals(".")||safe.equals("..")?"texture":safe;}
+    private static void write(Path path,int width,int height,byte[] rgba,boolean flip){
+        try{
+            Files.createDirectories(path.getParent());final var image=new BufferedImage(width,height,BufferedImage.TYPE_INT_ARGB);
+            for(int y=0;y<height;y++)for(int x=0;x<width;x++){
+                final int at=((flip?height-y-1:y)*width+x)*4;
+                image.setRGB(x,y,(rgba[at+3]&255)<<24|(rgba[at]&255)<<16|(rgba[at+1]&255)<<8|(rgba[at+2]&255));
+            }
+            if(!ImageIO.write(image,"png",path.toFile()))throw new IOException("No PNG writer is available");
+        }catch(IOException failure){throw new CompletionException("Failed to write native texture "+path,failure);}
     }
 }

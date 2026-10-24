@@ -1,80 +1,37 @@
 package foundry.veil.api.client.render.shader.compiler;
 
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.pipeline.ShaderSource;
 import foundry.veil.impl.client.render.shader.compiler.CachedShaderCompiler;
 import foundry.veil.impl.client.render.shader.compiler.DirectShaderCompiler;
-import net.minecraft.resources.ResourceLocation;
 import org.jetbrains.annotations.Nullable;
-import org.lwjgl.system.NativeResource;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.util.concurrent.Executor;
 
-/**
- * <p>Creates and compiles shaders for shader programs.</p>
- * <p>Create a compiler using {@link #direct(ShaderProvider)} for a single program,
- * or {@link #cached(ShaderProvider)} if compiling multiple.</p>
- *
- * @author Ocelot
- */
-public interface ShaderCompiler extends NativeResource {
+/** Compiles a complete immutable native pipeline, including its actual draw state and typed bindings. */
+public interface ShaderCompiler extends AutoCloseable {
+    /** The supplied source remains caller-owned and must remain live until this call returns. */
+    CompiledShader compile(RenderPipeline pipeline, ShaderSource source, Executor workers) throws ShaderException;
 
-    /**
-     * Creates a new shader and attempts to attach sources read from file to it.
-     * The sources are read from
-     * The shader will automatically be deleted at some point in the future.
-     *
-     * @param type The type of shader to create
-     * @param path The location of the shader to attach
-     * @return A new shader that can be attached to programs
-     * @throws IOException     If the file could not be found
-     * @throws ShaderException If an error occurs while compiling the shader
-     */
-    CompiledShader compile(int type, ResourceLocation path) throws IOException, ShaderException;
+    /** The provider transfers a fresh source owner, closed after native compilation finishes. */
+    CompiledShader compile(RenderPipeline pipeline, Executor workers) throws IOException, ShaderException;
 
-    /**
-     * Creates a new shader and attempts to attach the specified sources to it.
-     * The shader will automatically be deleted at some point in the future.
-     *
-     * @param type   The type of shader to create
-     * @param source The source of the shader to attach
-     * @return A new shader that can be attached to programs
-     * @throws ShaderException If an error occurs while compiling the shader
-     */
-    CompiledShader compile(int type, VeilShaderSource source) throws ShaderException;
-
-    /**
-     * Constructs a shader compiler that creates a new shader for each requested type.
-     *
-     * @param provider The source of shader files
-     * @return shader compiler
-     */
-    static ShaderCompiler direct(@Nullable ShaderProvider provider) {
-        return new DirectShaderCompiler(provider);
+    static ShaderCompiler direct(GpuDevice device, @Nullable ShaderProvider provider) {
+        return new DirectShaderCompiler(device, provider);
     }
-
-    /**
-     * Constructs a shader compiler that caches duplicate shader sources.
-     *
-     * @param provider The source of shader files
-     * @return cached shader compiler
-     */
-    static ShaderCompiler cached(@Nullable ShaderProvider provider) {
-        return new CachedShaderCompiler(provider);
+    static ShaderCompiler direct(GpuDevice device) { return direct(device, null); }
+    static ShaderCompiler cached(GpuDevice device, @Nullable ShaderProvider provider) {
+        return new CachedShaderCompiler(device, provider);
     }
+    static ShaderCompiler cached(GpuDevice device) { return cached(device, null); }
 
-    /**
-     * Provides shader sources for the compiler.
-     */
+    void free();
+    @Override default void close() { this.free(); }
+
     @FunctionalInterface
     interface ShaderProvider {
-
-        /**
-         * Reads a shader source by location.
-         *
-         * @param location The location of the shader to retrieve
-         * @return The shader source found
-         * @throws FileNotFoundException If the shader source does not exist
-         */
-        VeilShaderSource getShader(ResourceLocation location) throws FileNotFoundException;
+        ShaderSource getShader(RenderPipeline pipeline) throws IOException;
     }
 }

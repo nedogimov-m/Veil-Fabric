@@ -1,100 +1,65 @@
 package foundry.veil.impl.client.render;
 
-import foundry.veil.Veil;
-import foundry.veil.api.client.render.VeilRenderSystem;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.device.GpuDevice;
 import foundry.veil.api.client.render.VeilShaderBufferLayout;
 import foundry.veil.api.client.render.shader.block.ShaderBlock;
-import foundry.veil.api.client.render.shader.program.ShaderProgram;
 import foundry.veil.impl.client.render.shader.block.LayoutShaderBlockImpl;
-import org.jetbrains.annotations.ApiStatus;
-import org.lwjgl.system.MemoryStack;
-
+import io.github.ocelot.glslprocessor.api.grammar.GlslTypeSpecifier;
 import java.nio.ByteBuffer;
-import java.nio.IntBuffer;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.function.BiConsumer;
 
-import static org.lwjgl.opengl.ARBProgramInterfaceQuery.*;
-import static org.lwjgl.opengl.GL31C.*;
-
-/**
- * Serializes an object one field at a time.
- *
- * @param fields The field offsets and serializers
- * @param <T>    The type of data being written
- */
-@ApiStatus.Internal
-public record LayoutSerializer<T>(Field<T>[] fields) implements BiConsumer<T, ByteBuffer> {
-
-    @SuppressWarnings("unchecked")
-    public static <T> LayoutShaderBlockImpl<T> create(VeilShaderBufferLayout<T> layout, ShaderProgram shader, String name, int blockIndex) {
-        int program = shader.getProgram();
-        ShaderBlock.BufferBinding binding = layout.binding();
-
-        if (VeilRenderSystem.programInterfaceQuerySupported()) {
-            int bufferInterface = binding == ShaderBlock.BufferBinding.UNIFORM ? GL_UNIFORM_BLOCK : GL_SHADER_STORAGE_BLOCK;
-            int fieldInterface = binding == ShaderBlock.BufferBinding.UNIFORM ? GL_UNIFORM : GL_BUFFER_VARIABLE;
-
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                IntBuffer fieldProperties = stack.ints(GL_OFFSET);
-                IntBuffer values = stack.mallocInt(1);
-                glGetProgramResourceiv(program, bufferInterface, blockIndex, stack.ints(GL_BUFFER_DATA_SIZE), null, values);
-
-                int size = values.get(0);
-                List<Field<T>> layoutFields = new ArrayList<>();
-                for (Map.Entry<String, VeilShaderBufferLayout.FieldSerializer<T>> entry : layout.fields().entrySet()) {
-                    String fieldName = name + "." + entry.getKey();
-                    int index = glGetProgramResourceIndex(program, fieldInterface, fieldName);
-                    if (index == -1) {
-                        Veil.LOGGER.warn("Failed to find buffer field '{}' in shader: {}", fieldName, shader.getName());
-                        continue;
-                    }
-
-                    glGetProgramResourceiv(program, fieldInterface, index, fieldProperties, null, values);
-                    layoutFields.add(new Field<>(values.get(0), entry.getValue()));
-                }
-
-                layoutFields.sort(Comparator.comparingInt(Field::offset));
-                LayoutSerializer<T> serializer = new LayoutSerializer<>(layoutFields.toArray(Field[]::new));
-                return new LayoutShaderBlockImpl<>(binding, size, serializer);
-            }
-        }
-
-        List<Field<T>> layoutFields = new ArrayList<>();
-        for (Map.Entry<String, VeilShaderBufferLayout.FieldSerializer<T>> entry : layout.fields().entrySet()) {
-            String fieldName = name + "." + entry.getKey();
-            int index = glGetUniformIndices(program, fieldName);
-            if (index == -1) {
-                Veil.LOGGER.warn("Failed to find buffer field '{}' in shader: {}", fieldName, shader.getName());
-                continue;
-            }
-
-            int offset = glGetActiveUniformsi(program, index, GL_UNIFORM_OFFSET);
-            if (offset == -1) {
-                Veil.LOGGER.warn("Buffer field '{}' in shader '{}' it not in a uniform block", fieldName, shader.getName());
-                continue;
-            }
-
-            layoutFields.add(new Field<>(offset, entry.getValue()));
-        }
-
-        int size = glGetActiveUniformBlocki(program, blockIndex, GL_UNIFORM_BLOCK_DATA_SIZE);
-
-        layoutFields.sort(Comparator.comparingInt(Field::offset));
-        LayoutSerializer<T> serializer = new LayoutSerializer<>(layoutFields.toArray(Field[]::new));
-        return new LayoutShaderBlockImpl<>(binding, size, serializer);
+/** Deterministic std140 layout; native pipelines never reflect GL program object IDs. */
+public record LayoutSerializer<T>(List<Field<T>> fields, int size) implements BiConsumer<T, ByteBuffer> {
+    public LayoutSerializer { fields = List.copyOf(fields); }
+    public static <T> LayoutShaderBlockImpl<T> create(VeilShaderBufferLayout<T> layout) {
+        return create(layout, RenderSystem.getDevice());
     }
-
-    @Override
-    public void accept(T value, ByteBuffer buffer) {
-        for (Field<T> field : this.fields) {
-            field.serializer.write(value, field.offset, buffer);
+    public static <T> LayoutShaderBlockImpl<T> create(VeilShaderBufferLayout<T> layout, GpuDevice device) {
+        LayoutSerializer<T> serializer = createSerializer(layout);
+        return new LayoutShaderBlockImpl<>(device, layout.binding(), serializer.size(), serializer);
+    }
+    public static <T> LayoutSerializer<T> createSerializer(VeilShaderBufferLayout<T> layout) {
+        if (layout.memoryLayout() != ShaderBlock.MemoryLayout.STD140) {
+            throw new UnsupportedOperationException("Native uniform blocks require explicit std140 layout: " + layout.memoryLayout());
         }
+        if (layout.binding() != ShaderBlock.BufferBinding.UNIFORM) throw new UnsupportedOperationException("Writable storage block needs a native algorithm migration");
+        List<Field<T>> fields = new ArrayList<>();
+        int offset = 0, blockAlignment = 16;
+        for (var field : layout.structSpecifier().getFields()) {
+            if (!(field.getType().getSpecifier() instanceof GlslTypeSpecifier.BuiltinType type)) {
+                throw new IllegalArgumentException("Nested/array block types need an explicit std140 schema: " + field.getName());
+            }
+            String name = type.getName();
+            int scalarBytes = type.isDouble() ? 8 : 4;
+            int alignment, bytes;
+            if (type.isMatrix()) {
+                String dimensions = name.substring(name.indexOf("mat") + 3);
+                int columns = dimensions.charAt(0) - '0';
+                int rows = dimensions.length() == 1 ? columns : dimensions.charAt(2) - '0';
+                int columnAlignment = rows >= 3 ? 4 * scalarBytes : rows * scalarBytes;
+                alignment = align(columnAlignment, 16);
+                int stride = align(rows * scalarBytes, alignment);
+                bytes = Math.multiplyExact(columns, stride);
+            } else if (type.isPrimitive() || type.isVector()) {
+                int components = type.getComponents();
+                alignment = (components >= 3 ? 4 : components) * scalarBytes;
+                bytes = components * scalarBytes;
+            } else throw new IllegalArgumentException("Unsupported block field type: " + name);
+            offset = align(offset, alignment);
+            var writer = layout.fields().get(field.getName());
+            if (writer == null) throw new IllegalArgumentException("No serializer for block field " + field.getName());
+            fields.add(new Field<>(field.getName(), offset, writer));
+            offset = Math.addExact(offset, bytes); blockAlignment = Math.max(blockAlignment, alignment);
+        }
+        return new LayoutSerializer<>(fields, align(offset, blockAlignment));
     }
-
-    private record Field<T>(int offset, VeilShaderBufferLayout.FieldSerializer<T> serializer) {
+    private static int align(int value, int alignment) { return Math.multiplyExact(Math.floorDiv(Math.addExact(value, alignment - 1), alignment), alignment); }
+    @Override public void accept(T value, ByteBuffer buffer) {
+        if (buffer.remaining() < this.size) throw new IllegalArgumentException("Destination smaller than native std140 layout");
+        for (Field<T> field : this.fields) field.serializer.write(value, field.offset, buffer);
     }
+    public record Field<T>(String name, int offset, VeilShaderBufferLayout.FieldSerializer<T> serializer) { }
 }

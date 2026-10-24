@@ -1,0 +1,7 @@
+{
+  "vertex":"veil:gpu_replacement",
+  "fragment":"veil:gpu_replacement",
+  "uniform_blocks":["ReplacementTint","Projection"],
+  "textures":{"ReplacementInput":{"type":"location","location":"veil_test:borrowed","filter":{"blur":false,"wrapX":"clamp_to_edge","wrapY":"clamp_to_edge"}}},
+  "definitions":[{"gain":"0.5"}]
+}

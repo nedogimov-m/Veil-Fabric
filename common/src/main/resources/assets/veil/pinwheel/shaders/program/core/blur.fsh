@@ -1,9 +1,12 @@
+#version 330
+#extension GL_ARB_separate_shader_objects : require
+
 uniform sampler2D DiffuseSampler0;
-uniform vec2 OutSize;
+layout(std140) uniform PostUniforms { vec2 InSize; vec2 OutSize; };
 
-in vec2 texCoord;
+layout(location=0) in vec2 texCoord;
 
-out vec4 fragColor;
+layout(location=0) out vec4 fragColor;
 
 const float offset = 3;
 

@@ -13,14 +13,14 @@ import foundry.veil.api.quasar.particle.ParticleModuleSet;
 import foundry.veil.api.quasar.particle.ParticleSystemManager;
 import imgui.ImGui;
 import imgui.type.ImString;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 public final class InitSubEmitterModuleData implements ParticleModuleData, EditorAttributeProvider {
 
-    public static final MapCodec<InitSubEmitterModuleData> CODEC = ResourceLocation.CODEC.fieldOf("subemitter").xmap(InitSubEmitterModuleData::new, InitSubEmitterModuleData::subEmitter);
-    private ResourceLocation subEmitter;
+    public static final MapCodec<InitSubEmitterModuleData> CODEC = Identifier.CODEC.fieldOf("subemitter").xmap(InitSubEmitterModuleData::new, InitSubEmitterModuleData::subEmitter);
+    private Identifier subEmitter;
 
-    public InitSubEmitterModuleData(ResourceLocation subEmitter) {
+    public InitSubEmitterModuleData(Identifier subEmitter) {
         this.subEmitter = subEmitter;
     }
 
@@ -48,13 +48,13 @@ public final class InitSubEmitterModuleData implements ParticleModuleData, Edito
         ImString textInput = new ImString(this.subEmitter.toString());
 
         if (ImGui.inputTextWithHint("subemitter", "namespace:path", textInput)) {
-            ResourceLocation location = ResourceLocation.parse(textInput.get());
-            QuasarParticles.registryAccess().registry(QuasarParticles.EMITTER).map(registry -> registry.get(location))
+            Identifier location = Identifier.parse(textInput.get());
+            QuasarParticles.registryAccess().lookup(QuasarParticles.EMITTER).map(registry -> registry.getValue(location))
                     .ifPresent(data -> this.subEmitter = location);
         }
     }
 
-    public ResourceLocation subEmitter() {
+    public Identifier subEmitter() {
         return subEmitter;
     }
 

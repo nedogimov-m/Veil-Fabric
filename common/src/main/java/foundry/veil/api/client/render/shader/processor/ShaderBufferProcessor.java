@@ -1,17 +1,20 @@
 package foundry.veil.api.client.render.shader.processor;
 
-import foundry.veil.api.client.registry.VeilShaderBufferRegistry;
+import foundry.veil.api.client.render.shader.NativeShaderBlocks;
+import foundry.veil.api.client.render.shader.block.ShaderBlock;
 import foundry.veil.api.client.render.VeilShaderBufferLayout;
 import foundry.veil.api.client.render.shader.ShaderFeature;
 import io.github.ocelot.glslprocessor.api.GlslSyntaxException;
 import io.github.ocelot.glslprocessor.api.node.GlslTree;
 import io.github.ocelot.glslprocessor.lib.anarres.cpp.LexerException;
-import net.minecraft.ResourceLocationException;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.IdentifierException;
+import net.minecraft.resources.Identifier;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Processes a shader to add buffer bindings.
@@ -21,8 +24,14 @@ import java.util.List;
 public class ShaderBufferProcessor implements ShaderPreProcessor {
 
     private static final String BUFFER_KEY = "#veil:buffer ";
+    private final Map<Identifier, VeilShaderBufferLayout<?>> layouts;
+    private final Consumer<String> requiredBlocks;
 
     public ShaderBufferProcessor() {
+        this(NativeShaderBlocks.snapshot(), ignored -> {});
+    }
+    public ShaderBufferProcessor(Map<Identifier, VeilShaderBufferLayout<?>> layouts, Consumer<String> requiredBlocks) {
+        this.layouts = Map.copyOf(layouts); this.requiredBlocks = java.util.Objects.requireNonNull(requiredBlocks);
     }
 
     @Override
@@ -40,16 +49,19 @@ public class ShaderBufferProcessor implements ShaderPreProcessor {
             String interfaceName = parts.length > 1 ? parts[1].trim() : null;
 
             try {
-                ResourceLocation name = ResourceLocation.parse(bufferId);
-                VeilShaderBufferLayout<?> layout = VeilShaderBufferRegistry.REGISTRY.get(name);
+                Identifier name = Identifier.parse(bufferId);
+                VeilShaderBufferLayout<?> layout = this.layouts.get(name);
                 if (layout == null) {
                     throw new IOException("Unknown buffer: " + name);
                 }
+                if (layout.binding() != ShaderBlock.BufferBinding.UNIFORM || layout.memoryLayout() != ShaderBlock.MemoryLayout.STD140)
+                    throw new IOException("Native source blocks require an explicit std140 uniform layout: " + name);
 
                 GlslTree loadedImport = new GlslTree();
                 loadedImport.getBody().add(layout.createNode(ctx.hasFeatures(ShaderFeature.SHADER_STORAGE), interfaceName));
                 ctx.include(tree, "#buffer " + name, loadedImport, IncludeOverloadStrategy.INCLUDE);
-            } catch (ResourceLocationException e) {
+                this.requiredBlocks.accept(layout.name());
+            } catch (IdentifierException e) {
                 throw new IOException("Invalid buffer: " + bufferId, e);
             }
         }

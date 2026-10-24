@@ -1,25 +1,28 @@
 package foundry.veil.fabric.util;
 
 import net.fabricmc.fabric.api.resource.IdentifiableResourceReloadListener;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.PreparableReloadListener;
-import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.util.profiling.ProfilerFiller;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
-public record FabricReloadListener(ResourceLocation id,
+public record FabricReloadListener(Identifier id,
                                    PreparableReloadListener listener) implements IdentifiableResourceReloadListener {
 
     @Override
-    public ResourceLocation getFabricId() {
+    public Identifier getFabricId() {
         return this.id;
     }
 
     @Override
-    public CompletableFuture<Void> reload(PreparationBarrier preparationBarrier, ResourceManager resourceManager, ProfilerFiller preparationsProfiler, ProfilerFiller reloadProfiler, Executor backgroundExecutor, Executor gameExecutor) {
-        return this.listener.reload(preparationBarrier, resourceManager, preparationsProfiler, reloadProfiler, backgroundExecutor, gameExecutor);
+    public void prepareSharedState(SharedState state) {
+        this.listener.prepareSharedState(state);
+    }
+
+    @Override
+    public CompletableFuture<Void> reload(SharedState state, Executor backgroundExecutor, PreparationBarrier preparationBarrier, Executor gameExecutor) {
+        return this.listener.reload(state, backgroundExecutor, preparationBarrier, gameExecutor);
     }
 
     @Override

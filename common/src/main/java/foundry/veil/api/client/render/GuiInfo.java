@@ -24,6 +24,7 @@ public class GuiInfo {
 
     public static VeilShaderBufferLayout<GuiInfo> createLayout() {
         return VeilShaderBufferLayout.<GuiInfo>builder()
+                .name("VeilGuiInfo")
                 .f32("GuiScale", GuiInfo::getGuiScale)
                 .build();
     }
@@ -32,16 +33,31 @@ public class GuiInfo {
      * Updates the camera matrices to match the current render system projection.
      */
     public void update() {
+        this.update((float) Minecraft.getInstance().getWindow().getGuiScale());
+    }
+
+    /** Use the scale belonging to the actual extracted native GUI draw. */
+    public void update(float scale) {
         ShaderBlock<GuiInfo> block = VeilRenderSystem.getBlock(VeilShaderBufferRegistry.GUI_INFO.get());
         if (block == null) {
             return;
         }
 
-        this.guiScale = (float) Minecraft.getInstance().getWindow().getGuiScale();
+        this.guiScale = scale;
 
         block.set(this);
         VeilRenderSystem.bind(VeilShaderBufferRegistry.GUI_INFO.get());
         this.enabled = true;
+    }
+
+    public record State(float guiScale, boolean enabled) {}
+
+    public State snapshot() { return new State(this.guiScale, this.enabled); }
+
+    /** Restore both the CPU value and its selection after a nested view. */
+    public void restore(State state) {
+        this.guiScale = state.guiScale();
+        if (state.enabled()) this.update(state.guiScale()); else this.unbind();
     }
 
     /**

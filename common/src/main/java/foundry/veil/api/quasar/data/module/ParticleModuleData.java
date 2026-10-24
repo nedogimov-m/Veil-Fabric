@@ -5,7 +5,7 @@ import foundry.veil.api.quasar.data.ParticleModuleTypeRegistry;
 import foundry.veil.api.quasar.data.QuasarParticles;
 import foundry.veil.api.quasar.particle.ParticleModuleSet;
 import net.minecraft.core.Holder;
-import net.minecraft.resources.RegistryFileCodec;
+import net.minecraft.core.registries.codec.RegistryFileCodec;
 import org.jetbrains.annotations.ApiStatus;
 
 public interface ParticleModuleData {
@@ -38,7 +38,7 @@ public interface ParticleModuleData {
     /**
      * @since 4.3.0
      */
-    Codec<Holder<ParticleModuleData>> CODEC = RegistryFileCodec.create(QuasarParticles.MODULES, DIRECT_CODEC);
+    Codec<Holder<ParticleModuleData>> CODEC = RegistryFileCodec.create(QuasarParticles.MODULES, DIRECT_CODEC, true);
 
     /**
      * @deprecated Use {@link #CODEC} instead

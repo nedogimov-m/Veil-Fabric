@@ -6,14 +6,9 @@ import foundry.veil.api.resource.VeilResourceManager;
 import foundry.veil.impl.flare.FlareManager;
 import foundry.veil.impl.resource.action.TemplateInspectAction;
 import foundry.veil.impl.resource.action.TextEditAction;
-import imgui.extension.texteditor.TextEditorLanguage;
-import net.minecraft.Util;
-import net.minecraft.client.Minecraft;
-import net.minecraft.util.profiling.InactiveProfiler;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 public record FlareResource(VeilResourceInfo resourceInfo) implements VeilTextResource<FlareResource> {
 
@@ -31,16 +26,12 @@ public record FlareResource(VeilResourceInfo resourceInfo) implements VeilTextRe
 
     @Override
     public void hotReload(VeilResourceManager resourceManager) throws IOException {
-        FlareManager.Reloader.INSTANCE.reload(CompletableFuture::completedFuture, resourceManager.resources(this.resourceInfo), InactiveProfiler.INSTANCE, InactiveProfiler.INSTANCE, Util.backgroundExecutor(), Minecraft.getInstance());
+        foundry.veil.api.resource.NativeResourceReload.reload(resourceManager.resources(this.resourceInfo), FlareManager.Reloader.INSTANCE)
+                .exceptionally(failure -> { foundry.veil.Veil.LOGGER.error("Failed native resource hot reload {}", this.resourceInfo.location(), failure); return null; });
     }
 
     @Override
     public int getIconCode() {
         return 0xEA1C;
-    }
-
-    @Override
-    public TextEditorLanguage languageDefinition() {
-        return TextEditorLanguage.Json();
     }
 }

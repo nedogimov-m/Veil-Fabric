@@ -3,8 +3,8 @@ package foundry.veil.api.quasar.data;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.Holder;
-import net.minecraft.resources.RegistryFileCodec;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.core.registries.codec.RegistryFileCodec;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -33,13 +33,13 @@ public record ParticleEmitterData(int maxLifetime,
             EmitterSettings.CODEC.fieldOf("emitter_settings").forGetter(ParticleEmitterData::emitterSettings),
             QuasarParticleData.CODEC.fieldOf("particle_data").forGetter(ParticleEmitterData::particleDataHolder)
     ).apply(instance, ParticleEmitterData::new));
-    public static final Codec<Holder<ParticleEmitterData>> CODEC = RegistryFileCodec.create(QuasarParticles.EMITTER, DIRECT_CODEC);
+    public static final Codec<Holder<ParticleEmitterData>> CODEC = RegistryFileCodec.create(QuasarParticles.EMITTER, DIRECT_CODEC, true);
 
     public QuasarParticleData particleData() {
         return this.particleDataHolder.value();
     }
 
-    public @Nullable ResourceLocation getRegistryId() {
+    public @Nullable Identifier getRegistryId() {
         return this.particleData().getRegistryId();
     }
 }

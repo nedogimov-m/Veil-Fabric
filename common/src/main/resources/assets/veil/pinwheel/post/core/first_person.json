@@ -10,7 +10,7 @@
     },
     {
       "type": "veil:depth_function",
-      "function": "LEQUAL"
+      "function": "GEQUAL"
     },
     {
       "type": "veil:blit",

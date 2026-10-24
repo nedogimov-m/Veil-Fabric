@@ -4,9 +4,7 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
-import foundry.veil.api.client.render.rendertype.VeilRenderType;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
-import net.minecraft.client.renderer.RenderStateShard;
 
 public record WriteMaskLayer(boolean color, boolean depth) implements RenderTypeLayer {
 
@@ -17,17 +15,7 @@ public record WriteMaskLayer(boolean color, boolean depth) implements RenderType
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        RenderStateShard.WriteMaskStateShard shard;
-        if (this.color && this.depth) {
-            shard = VeilRenderType.colorDepthWriteShard();
-        } else if (this.color) {
-            shard = VeilRenderType.colorWriteShard();
-        } else if (this.depth) {
-            shard = VeilRenderType.depthWriteShard();
-        } else {
-            shard = VeilRenderType.NO_WRITE;
-        }
-        builder.writeMaskState(shard);
+        builder.writeMaskState(this.color, this.depth);
     }
 
     @Override

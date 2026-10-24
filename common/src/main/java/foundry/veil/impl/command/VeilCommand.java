@@ -15,10 +15,10 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
-import net.minecraft.commands.arguments.ResourceLocationArgument;
+import net.minecraft.commands.arguments.IdentifierArgument;
 import net.minecraft.commands.synchronization.SuggestionProviders;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerPlayer;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -41,27 +41,27 @@ public final class VeilCommand {
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("veil").
-                requires(stack -> stack.hasPermission(Commands.LEVEL_GAMEMASTERS))
+                requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
                 .then(Commands.literal("post_processing")
                         .then(Commands.literal("add").then(Commands.argument("targets", EntityArgument.players())
-                                .then(Commands.argument("pipeline", ResourceLocationArgument.id()).suggests(PIPELINE_SUGGESTIONS)
+                                .then(Commands.argument("pipeline", IdentifierArgument.id()).suggests(PIPELINE_SUGGESTIONS)
                                         .executes(ctx -> {
                                             Collection<ServerPlayer> targets = EntityArgument.getPlayers(ctx, "targets");
-                                            ResourceLocation pipeline = ResourceLocationArgument.getId(ctx, "pipeline");
+                                            Identifier pipeline = IdentifierArgument.getId(ctx, "pipeline");
                                             return addPipeline(ctx.getSource(), targets, pipeline, 1000);
                                         })
                                         .then(Commands.argument("priority", IntegerArgumentType.integer()).executes(ctx -> {
                                             Collection<ServerPlayer> targets = EntityArgument.getPlayers(ctx, "targets");
-                                            ResourceLocation pipeline = ResourceLocationArgument.getId(ctx, "pipeline");
+                                            Identifier pipeline = IdentifierArgument.getId(ctx, "pipeline");
                                             int priority = IntegerArgumentType.getInteger(ctx, "priority");
                                             return addPipeline(ctx.getSource(), targets, pipeline, priority);
                                         }))
                                 )))
                         .then(Commands.literal("remove").then(Commands.argument("targets", EntityArgument.players())
-                                .then(Commands.argument("pipeline", ResourceLocationArgument.id()).suggests(PIPELINE_SUGGESTIONS)
+                                .then(Commands.argument("pipeline", IdentifierArgument.id()).suggests(PIPELINE_SUGGESTIONS)
                                         .executes(ctx -> {
                                             Collection<ServerPlayer> targets = EntityArgument.getPlayers(ctx, "targets");
-                                            ResourceLocation pipeline = ResourceLocationArgument.getId(ctx, "pipeline");
+                                            Identifier pipeline = IdentifierArgument.getId(ctx, "pipeline");
                                             return removePipeline(ctx.getSource(), targets, pipeline);
                                         })
                                 )))
@@ -74,7 +74,7 @@ public final class VeilCommand {
                 ));
     }
 
-    private static int addPipeline(CommandSourceStack source, Collection<ServerPlayer> targets, ResourceLocation pipeline, int priority) {
+    private static int addPipeline(CommandSourceStack source, Collection<ServerPlayer> targets, Identifier pipeline, int priority) {
         List<ServerPlayer> sentPlayers = new ArrayList<>();
 
         VeilPlatform platform = Veil.platform();
@@ -98,7 +98,7 @@ public final class VeilCommand {
         return sentPlayers.size();
     }
 
-    private static int removePipeline(CommandSourceStack source, Collection<ServerPlayer> targets, ResourceLocation pipeline) {
+    private static int removePipeline(CommandSourceStack source, Collection<ServerPlayer> targets, Identifier pipeline) {
         List<ServerPlayer> sentPlayers = new ArrayList<>();
 
         VeilPlatform platform = Veil.platform();

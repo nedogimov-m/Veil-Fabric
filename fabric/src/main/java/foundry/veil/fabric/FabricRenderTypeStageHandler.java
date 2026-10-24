@@ -1,95 +1,52 @@
 package foundry.veil.fabric;
 
-import com.google.common.collect.ImmutableList;
-import com.mojang.blaze3d.vertex.ByteBufferBuilder;
-import com.mojang.blaze3d.vertex.PoseStack;
-import foundry.veil.api.client.render.VeilLevelPerspectiveRenderer;
-import foundry.veil.api.client.render.VeilRenderBridge;
-import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.rendertype.VeilRenderType;
 import foundry.veil.api.event.VeilRenderLevelStageEvent;
-import foundry.veil.ext.LevelRendererBlockLayerExtension;
 import foundry.veil.fabric.event.FabricVeilRenderLevelStageEvent;
-import foundry.veil.mixin.rendertype.accessor.RenderTypeBufferSourceAccessor;
-import it.unimi.dsi.fastutil.objects.ObjectArraySet;
-import net.minecraft.client.Camera;
-import net.minecraft.client.DeltaTracker;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.LevelRenderer;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.client.renderer.culling.Frustum;
-import net.minecraft.util.profiling.ProfilerFiller;
-import net.minecraft.world.phys.Vec3;
-import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.Nullable;
-import org.joml.Matrix4fc;
+import foundry.veil.impl.client.necromancer.render.NecromancerRenderDispatcher;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelTerrainRenderContext;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
+import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.function.BiConsumer;
 
-import java.util.*;
+/** Routes each real native phase once; terrain passes are not relabeled as old GL layers. */
+public final class FabricRenderTypeStageHandler {
+    private static boolean registered;
+    private static final List<Submission> SUBMISSIONS = new ArrayList<>();
+    private record Submission(int order, BiConsumer<VeilRenderLevelStageEvent.Context, OrderedSubmitNodeCollector> callback) { }
+    public static synchronized void registerSubmission(int order, BiConsumer<VeilRenderLevelStageEvent.Context, OrderedSubmitNodeCollector> callback) {
+        SUBMISSIONS.add(new Submission(order, Objects.requireNonNull(callback)));
+    }
+    private FabricRenderTypeStageHandler() { }
 
-@ApiStatus.Internal
-public class FabricRenderTypeStageHandler {
-
-    private static final Map<VeilRenderLevelStageEvent.Stage, Set<RenderType>> STAGE_RENDER_TYPES = new EnumMap<>(VeilRenderLevelStageEvent.Stage.class);
-    private static Set<RenderType> CUSTOM_BLOCK_LAYERS = Set.of();
-    private static List<RenderType> BLOCK_LAYERS;
-
-    public static void register(@Nullable VeilRenderLevelStageEvent.Stage stage, RenderType renderType) {
-        SequencedMap<RenderType, ByteBufferBuilder> fixedBuffers = ((RenderTypeBufferSourceAccessor) Minecraft.getInstance().renderBuffers().bufferSource()).getFixedBuffers();
-        ByteBufferBuilder old = fixedBuffers.put(renderType, new ByteBufferBuilder(renderType.bufferSize()));
-        if (old != null) {
-            old.close();
-        }
-
-        if (stage != null) {
-            STAGE_RENDER_TYPES.computeIfAbsent(stage, unused -> new ObjectArraySet<>()).add(renderType);
-        }
+    public static void registerEvents() {
+        if (registered) return;
+        registered = true;
+        LevelRenderEvents.START_MAIN.register(context -> fire(VeilRenderLevelStageEvent.Stage.START_MAIN, context));
+        LevelRenderEvents.AFTER_OPAQUE_TERRAIN.register(context -> fire(VeilRenderLevelStageEvent.Stage.AFTER_OPAQUE_TERRAIN, context));
+        LevelRenderEvents.COLLECT_SUBMITS.register(context -> fire(VeilRenderLevelStageEvent.Stage.COLLECT_SUBMITS, context));
+        LevelRenderEvents.AFTER_SOLID_FEATURES.register(context -> fire(VeilRenderLevelStageEvent.Stage.AFTER_SOLID_FEATURES, context));
+        LevelRenderEvents.AFTER_TRANSLUCENT_FEATURES.register(context -> fire(VeilRenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_FEATURES, context));
+        LevelRenderEvents.BEFORE_TRANSLUCENT_TERRAIN.register(context -> fire(VeilRenderLevelStageEvent.Stage.BEFORE_TRANSLUCENT_TERRAIN, context));
+        LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN.register(context -> fire(VeilRenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_TERRAIN, context));
+        LevelRenderEvents.END_MAIN.register(context -> fire(VeilRenderLevelStageEvent.Stage.END_MAIN, context));
     }
 
-    public static void renderStage(LevelRendererBlockLayerExtension extension, ProfilerFiller profiler, VeilRenderLevelStageEvent.Stage stage, LevelRenderer levelRenderer, MultiBufferSource.BufferSource bufferSource, @Nullable PoseStack poseStack, Matrix4fc frustumMatrix, Matrix4fc projectionMatrix, int renderTick, DeltaTracker deltaTracker, Camera camera, Frustum frustum) {
-        profiler.push(stage.getName());
-        FabricVeilRenderLevelStageEvent.EVENT.invoker().onRenderLevelStage(stage, levelRenderer, bufferSource, VeilRenderBridge.create(poseStack != null ? poseStack : new PoseStack()), frustumMatrix, projectionMatrix, renderTick, deltaTracker, camera, frustum);
-        profiler.pop();
-
-        Set<RenderType> stages = STAGE_RENDER_TYPES.get(stage);
-        if (stages != null) {
-            stages.forEach(renderType -> {
-                profiler.push("render_" + VeilRenderType.getName(renderType));
-                if (CUSTOM_BLOCK_LAYERS.contains(renderType)) {
-                    Vec3 pos = camera.getPosition();
-                    extension.veil$drawBlockLayer(renderType, pos.x, pos.y, pos.z, frustumMatrix, projectionMatrix);
-                }
-                bufferSource.endBatch(renderType);
-                profiler.pop();
-            });
-        }
-
-        if (!VeilLevelPerspectiveRenderer.isRenderingPerspective()) {
-            profiler.push("post");
-            VeilRenderSystem.renderPost(stage);
-            profiler.pop();
-        }
-    }
-
-    // Some mods add custom block layers by changing the field, so account for that
-    public static List<RenderType> getBlockLayers(List<RenderType> base) {
-        if (CUSTOM_BLOCK_LAYERS.isEmpty()) {
-            return base;
-        }
-
-        if (BLOCK_LAYERS == null || base.size() != BLOCK_LAYERS.size()) {
-            ImmutableList.Builder<RenderType> blockLayers = ImmutableList.builder();
-            blockLayers.addAll(base);
-            if (CUSTOM_BLOCK_LAYERS != null) {
-                blockLayers.addAll(CUSTOM_BLOCK_LAYERS);
+    private static void fire(VeilRenderLevelStageEvent.Stage stage, LevelTerrainRenderContext nativeContext) {
+        LevelRenderContext geometry = nativeContext instanceof LevelRenderContext context ? context : null;
+        var context = new VeilRenderLevelStageEvent.Context(stage, nativeContext.gameRenderer(), nativeContext.levelRenderer(),
+                nativeContext.levelState(), geometry != null ? geometry.poseStack() : null,
+                stage == VeilRenderLevelStageEvent.Stage.COLLECT_SUBMITS && geometry != null ? geometry.submitNodeCollector() : null);
+        if (stage == VeilRenderLevelStageEvent.Stage.COLLECT_SUBMITS && geometry != null) {
+            try (var skeletal = NecromancerRenderDispatcher.begin(geometry.submitNodeCollector())) {
+                List<Submission> submissions;
+                synchronized (FabricRenderTypeStageHandler.class) { submissions = List.copyOf(SUBMISSIONS); }
+                for (Submission submission : submissions) submission.callback.accept(context, geometry.submitNodeCollector().order(submission.order));
+                FabricVeilRenderLevelStageEvent.EVENT.invoker().onRenderLevelStage(stage, context);
             }
-            BLOCK_LAYERS = blockLayers.build();
-        }
-        return BLOCK_LAYERS;
-    }
-
-    public static void setBlockLayers(Set<RenderType> blockLayers) {
-        CUSTOM_BLOCK_LAYERS = Set.copyOf(blockLayers);
-        BLOCK_LAYERS = null;
+        } else FabricVeilRenderLevelStageEvent.EVENT.invoker().onRenderLevelStage(stage, context);
     }
 }

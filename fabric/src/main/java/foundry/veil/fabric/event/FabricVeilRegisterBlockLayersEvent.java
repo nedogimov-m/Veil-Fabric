@@ -6,8 +6,8 @@ import net.fabricmc.fabric.api.event.Event;
 import net.fabricmc.fabric.api.event.EventFactory;
 
 /**
- * <p>Fired to register block layers.</p>
- * <p><strong>Note: This does not add fixed buffers automatically. To do that, also register the render operand with {@link VeilRegisterFixedBuffersEvent}</strong></p>
+ * Fired to register extra block geometry on the actual native ordered collector.
+ * Terrain materials keep Minecraft's native enum layers and pipeline ownership.
  *
  * @author Ocelot
  * @see VeilRegisterFixedBuffersEvent

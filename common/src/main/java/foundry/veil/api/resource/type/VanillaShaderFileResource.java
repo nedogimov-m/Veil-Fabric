@@ -1,12 +1,9 @@
 package foundry.veil.api.resource.type;
 
-import foundry.veil.api.client.render.VeilRenderSystem;
 import foundry.veil.api.resource.VeilResourceAction;
 import foundry.veil.api.resource.VeilResourceInfo;
 import foundry.veil.api.resource.VeilResourceManager;
 import foundry.veil.impl.resource.action.TextEditAction;
-import foundry.veil.mixin.debug.accessor.DebugGameRendererAccessor;
-import imgui.extension.texteditor.TextEditorLanguage;
 import net.minecraft.client.Minecraft;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -27,7 +24,9 @@ public record VanillaShaderFileResource(VeilResourceInfo resourceInfo) implement
 
     @Override
     public void hotReload(VeilResourceManager resourceManager) {
-        // I would rather reload only the specific shader, but it's more compatible to reload all shaders
-        VeilRenderSystem.renderer().getVanillaShaderCompiler().reload(((DebugGameRendererAccessor) Minecraft.getInstance().gameRenderer).getShaders().values());
+        // Native vanilla shader sources and cache variants are replaced by their real resource reload owner.
+        Minecraft.getInstance().reloadResourcePacks().exceptionally(failure -> {
+            org.slf4j.LoggerFactory.getLogger("Veil").error("Cannot reload vanilla native shader resources", failure); return null;
+        });
     }
 }

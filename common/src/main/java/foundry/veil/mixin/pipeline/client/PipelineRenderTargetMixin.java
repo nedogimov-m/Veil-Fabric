@@ -1,139 +1,80 @@
 package foundry.veil.mixin.pipeline.client;
 
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.platform.GlStateManager;
-import foundry.veil.api.client.render.framebuffer.AdvancedFbo;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import foundry.veil.api.client.render.gpu.GpuFramebuffer;
 import foundry.veil.ext.RenderTargetExtension;
+import foundry.veil.impl.client.render.framebuffer.NativeRenderTargetStorage;
 import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+/** Native target redirection uses actual typed fields; its own allocation/deletion still owns only native storage. */
 @Mixin(RenderTarget.class)
 public abstract class PipelineRenderTargetMixin implements RenderTargetExtension {
+    @Shadow public int width;
+    @Shadow public int height;
+    @Shadow @Nullable protected GpuTexture colorTexture;
+    @Shadow @Nullable protected GpuTextureView colorTextureView;
+    @Shadow @Nullable protected GpuTexture depthTexture;
+    @Shadow @Nullable protected GpuTextureView depthTextureView;
+    @Unique @Nullable private GpuFramebuffer veil$wrapper;
+    @Unique @Nullable private NativeRenderTargetStorage veil$nativeStorage;
 
-    @Shadow
-    public int frameBufferId;
-    @Shadow
-    public int width;
-    @Shadow
-    public int height;
-    @Shadow
-    public int viewWidth;
-    @Shadow
-    public int viewHeight;
-
-    @Unique
-    private AdvancedFbo veil$wrapper;
-    @Unique
-    private int veil$vanillaFramebufferId;
-    @Unique
-    private int veil$vanillaWidth;
-    @Unique
-    private int veil$vanillaHeight;
-    @Unique
-    private int veil$vanillaViewWidth;
-    @Unique
-    private int veil$vanillaViewHeight;
-
-    @Unique
-    private void veil$saveState() {
-        this.veil$vanillaFramebufferId = this.frameBufferId;
-        this.veil$vanillaWidth = this.width;
-        this.veil$vanillaHeight = this.height;
-        this.veil$vanillaViewWidth = this.viewWidth;
-        this.veil$vanillaViewHeight = this.viewHeight;
+    @Unique private NativeRenderTargetStorage veil$capture() {
+        return new NativeRenderTargetStorage(width,height,colorTexture,colorTextureView,depthTexture,depthTextureView);
+    }
+    @Unique private void veil$restoreNative() {
+        final var stored=java.util.Objects.requireNonNull(veil$nativeStorage);
+        width=stored.width();height=stored.height();colorTexture=stored.color();colorTextureView=stored.colorView();
+        depthTexture=stored.depth();depthTextureView=stored.depthView();
+    }
+    @Unique private void veil$applyWrapper() {
+        final var framebuffer=java.util.Objects.requireNonNull(veil$wrapper);
+        width=framebuffer.width();height=framebuffer.height();
+        colorTexture=framebuffer.color(0).texture();colorTextureView=framebuffer.color(0).view();
+        depthTexture=framebuffer.hasDepth()?framebuffer.depth().texture():null;
+        depthTextureView=framebuffer.hasDepth()?framebuffer.depth().view():null;
     }
 
-    @Unique
-    private void veil$loadState() {
-        this.frameBufferId = this.veil$vanillaFramebufferId;
-        this.width = this.veil$vanillaWidth;
-        this.height = this.veil$vanillaHeight;
-        this.viewWidth = this.veil$vanillaViewWidth;
-        this.viewHeight = this.veil$vanillaViewHeight;
-    }
-
-    @Inject(method = "destroyBuffers", at = @At("HEAD"))
-    public void destroyBuffers(CallbackInfo ci) {
-        if (this.veil$wrapper != null) {
-            this.veil$loadState();
+    @Override public void veil$setWrapper(@Nullable GpuFramebuffer framebuffer) {
+        RenderSystem.assertOnRenderThread();
+        if(framebuffer==veil$wrapper)return;
+        if(framebuffer!=null) {
+            if(framebuffer.colorCount()==0)throw new IllegalArgumentException("RenderTarget redirection requires a color attachment");
+            framebuffer.color(0).view();if(framebuffer.hasDepth())framebuffer.depth().view();
+            if(veil$wrapper==null)veil$nativeStorage=veil$capture();
+            veil$wrapper=framebuffer;veil$applyWrapper();
+        } else {
+            veil$restoreNative();veil$wrapper=null;veil$nativeStorage=null;
         }
     }
-
-    @Inject(method = "createBuffers", at = @At("RETURN"))
-    public void createBuffers(CallbackInfo ci) {
-        if (this.veil$wrapper != null) {
-            this.veil$saveState();
-            this.frameBufferId = this.veil$wrapper.getId();
-            this.width = this.veil$wrapper.getWidth();
-            this.height = this.veil$wrapper.getHeight();
-            this.viewWidth = this.width;
-            this.viewHeight = this.height;
-        }
+    @Override public @Nullable GpuFramebuffer veil$getWrapper(){return veil$wrapper;}
+    @Override public @Nullable GpuTextureView veil$getTexture(int index) {
+        if(veil$wrapper!=null)return index>=0&&index<veil$wrapper.colorCount()?veil$wrapper.color(index).view():null;
+        return index==0?colorTextureView:null;
     }
+    @Inject(method="hasDepth",at=@At("HEAD"),cancellable=true)
+    private void veil$nativeDepth(CallbackInfoReturnable<Boolean> result){if(veil$wrapper!=null)result.setReturnValue(veil$wrapper.hasDepth());}
 
-    @Override
-    public void veil$setWrapper(@Nullable AdvancedFbo fbo) {
-        // If the state has changed
-        if (this.veil$wrapper == null ^ fbo == null) {
-            if (fbo != null) {
-                this.veil$saveState();
-                this.frameBufferId = fbo.getId();
-                this.width = fbo.getWidth();
-                this.height = fbo.getHeight();
-                this.viewWidth = this.width;
-                this.viewHeight = this.height;
-            } else {
-                this.veil$loadState();
-            }
-        }
-        this.veil$wrapper = fbo;
+    @WrapMethod(method="destroyBuffers")
+    private void veil$destroyNativeStorage(Operation<Void> original) {
+        if(veil$wrapper==null){original.call();return;}
+        veil$restoreNative();
+        try {original.call();} finally {veil$nativeStorage=veil$capture();veil$applyWrapper();}
     }
-
-    @Override
-    public int veil$getTexture(int buffer) {
-        if (this.veil$wrapper != null && this.veil$wrapper.isColorTextureAttachment(buffer)) {
-            return this.veil$wrapper.getColorTextureAttachment(buffer).getId();
-        }
-        return 0;
-    }
-
-    @Inject(method = "bindRead", at = @At("HEAD"), cancellable = true)
-    public void bindRead(CallbackInfo ci) {
-        if (this.veil$wrapper != null) {
-            if (this.veil$wrapper.isColorTextureAttachment(0)) {
-                this.veil$wrapper.getColorTextureAttachment(0).bind();
-            } else {
-                GlStateManager._bindTexture(0);
-            }
-            ci.cancel();
-        }
-    }
-
-    @Inject(method = "bindWrite", at = @At("HEAD"), cancellable = true)
-    public void bindWrite(boolean setViewport, CallbackInfo ci) {
-        if (this.veil$wrapper != null) {
-            this.veil$wrapper.bind(setViewport);
-            ci.cancel();
-        }
-    }
-
-    @Inject(method = "getColorTextureId", at = @At("HEAD"), cancellable = true)
-    public void getColorTextureId(CallbackInfoReturnable<Integer> cir) {
-        if (this.veil$wrapper != null) {
-            cir.setReturnValue(this.veil$wrapper.getColorTextureAttachment(0).getId());
-        }
-    }
-
-    @Inject(method = "getDepthTextureId", at = @At("HEAD"), cancellable = true)
-    public void getDepthTextureId(CallbackInfoReturnable<Integer> cir) {
-        if (this.veil$wrapper != null) {
-            cir.setReturnValue(this.veil$wrapper.getDepthTextureAttachment().getId());
-        }
+    @WrapMethod(method="createBuffers")
+    private void veil$createNativeStorage(int width,int height,Operation<Void> original) {
+        if(veil$wrapper==null){original.call(width,height);return;}
+        veil$restoreNative();
+        try {original.call(width,height);} finally {veil$nativeStorage=veil$capture();veil$applyWrapper();}
     }
 }

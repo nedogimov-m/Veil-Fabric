@@ -1,173 +1,61 @@
 package foundry.veil.api.client.render.post;
 
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.api.pipeline.CompareOp;
+import com.mojang.renderpearl.api.textures.GpuSampler;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.serialization.Codec;
 import foundry.veil.api.client.registry.PostPipelineStageRegistry;
-import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.framebuffer.AdvancedFbo;
-import foundry.veil.api.client.render.shader.program.ShaderProgram;
-import foundry.veil.api.client.render.shader.program.TextureUniformAccess;
-import foundry.veil.api.client.render.shader.program.UniformAccess;
+import foundry.veil.api.client.render.gpu.GpuFramebuffer;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
+import foundry.veil.api.client.render.shader.ShaderManager;
 import foundry.veil.api.client.render.shader.texture.ShaderTextureSource;
-import foundry.veil.api.client.render.shader.uniform.ShaderUniformAccess;
-import net.minecraft.resources.ResourceLocation;
-import org.jetbrains.annotations.ApiStatus;
+import foundry.veil.api.client.render.texture.TextureFilter;
+import foundry.veil.api.client.render.dynamicbuffer.DynamicBufferType;
+import foundry.veil.api.client.render.framebuffer.FramebufferDefinition;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
 import org.lwjgl.system.NativeResource;
+import java.util.concurrent.Executor;
 
-/**
- * <p>A series of post-processing effects that can be run to change the current framebuffer state.</p>
- * <p>It can be fully run using {@link PostProcessingManager#runPipeline(PostPipeline)}.</p>
- * <p>This class implements {@link UniformAccess} to allow changing uniforms in all shaders.</p>
- *
- * @author Ocelot
- */
-public interface PostPipeline extends UniformAccess, NativeResource {
-
-    Codec<PostPipeline> CODEC = PostPipelineStageRegistry.REGISTRY.byNameCodec().dispatch(PostPipeline::getType, PostPipelineStageRegistry.PipelineType::codec);
-
-    /**
-     * Applies this post effect.
-     * {@link PostProcessingManager#runPipeline(PostPipeline)} should be called to run this pipeline.
-     *
-     * @param context The context to use when running this pipeline.
-     */
-    @ApiStatus.OverrideOnly
+/** Explicit native GPU post stages. No global framebuffer, shader or GL state. */
+public interface PostPipeline extends NativeResource {
+    Codec<PostPipeline> CODEC = PostPipelineStageRegistry.REGISTRY.byNameCodec()
+            .dispatch(PostPipeline::getType, PostPipelineStageRegistry.PipelineType::codec);
     void apply(Context context);
-
-    /**
-     * Allows a post pipeline to dispose of any resources it takes up.
-     */
-    @Override
-    default void free() {
-    }
-
-    /**
-     * @return The type of post effect this is
-     */
+    @Override default void free() { }
     PostPipelineStageRegistry.PipelineType<? extends PostPipeline> getType();
 
-    @Override
-    default int getUniformLocation(CharSequence name) {
-        throw new UnsupportedOperationException("Cannot get values from post pipelines");
-    }
-
-    @Override
-    default @Nullable ShaderUniformAccess getUniform(CharSequence name) {
-        return null;
-    }
-
-    @Override
-    default ShaderUniformAccess getUniformSafe(CharSequence name) {
-        return ShaderUniformAccess.EMPTY;
-    }
-
-    @Override
-    default int getUniformBlock(CharSequence name) {
-        throw new UnsupportedOperationException("Cannot get values from post pipelines");
-    }
-
-    @Override
-    default int getStorageBlock(CharSequence name) {
-        throw new UnsupportedOperationException("Cannot get values from post pipelines");
-    }
-
-    @Override
-    default boolean hasUniform(CharSequence name) {
-        return false;
-    }
-
-    @Override
-    default boolean hasUniformBlock(CharSequence name) {
-        return false;
-    }
-
-    @Override
-    default boolean hasStorageBlock(CharSequence name) {
-        return false;
-    }
-
-    @Override
-    default void setUniformBlock(CharSequence name, int binding) {
-    }
-
-    @Override
-    default void setStorageBlock(CharSequence name, int binding) {
-    }
-
-    /**
-     * Context for applying post pipelines.
-     *
-     * @author Ocelot
-     */
-    @ApiStatus.NonExtendable
     interface Context extends ShaderTextureSource.Context {
-
-        /**
-         * Binds a named sampler id. All samplers can be applied with {@link #applySamplers(TextureUniformAccess)} for adding them to shaders.
-         *
-         * @param name      The name of the sampler
-         * @param textureId The id of the texture to bind
-         * @param samplerId The id of the sampler to bind
-         * @since 3.6.0
-         */
-        void setTexture(CharSequence name, int target, int textureId, int samplerId);
-
-        /**
-         * Sets a framebuffer to a name. This allows post stages to create new framebuffers that can be accessed later on.
-         *
-         * @param name        The name of the framebuffer
-         * @param framebuffer The framebuffer to set
-         */
-        void setFramebuffer(ResourceLocation name, AdvancedFbo framebuffer);
-
-        /**
-         * Applies each sampler to the specified shader.
-         *
-         * @param shader The shader to apply the samplers to
-         */
-        void applySamplers(TextureUniformAccess shader);
-
-        /**
-         * Removes all post-processing samplers from the specified shader.
-         *
-         * @param shader The shader to apply the samplers to
-         */
-        void clearSamplers(TextureUniformAccess shader);
-
-        /**
-         * Retrieves a framebuffer by id or the main framebuffer if it doesn't exist.
-         *
-         * @param name The name of the framebuffer to retrieve
-         * @return The framebuffer with that id or the main framebuffer
-         */
-        default AdvancedFbo getFramebufferOrDraw(ResourceLocation name) {
-            AdvancedFbo fbo = this.getFramebuffer(name);
-            return fbo != null ? fbo : this.getDrawFramebuffer();
+        GpuDevice device();
+        CommandEncoder encoder();
+        Executor workers();
+        ShaderManager shaders();
+        void setTexture(String name, GpuTextureView texture, GpuSampler sampler);
+        void setTexture(String name, GpuTextureView texture, TextureFilter filter);
+        void setFramebuffer(Identifier name, GpuFramebuffer framebuffer);
+        void setFramebuffer(Identifier name, GpuFramebuffer framebuffer, FramebufferDefinition definition);
+        void applySamplers(GpuShaderProgram shader);
+        GpuFramebuffer getDrawFramebuffer();
+        default GpuFramebuffer getFramebufferOrDraw(Identifier name) {
+            GpuFramebuffer target = this.getFramebuffer(name);
+            return target != null ? target : this.getDrawFramebuffer();
         }
-
-        /**
-         * @return The main framebuffer to draw into. This is later copied onto the main framebuffer
-         */
-        AdvancedFbo getDrawFramebuffer();
-
-        /**
-         * Retrieves a post pipeline by name.
-         *
-         * @param name The name of the pipeline to get
-         * @return The registered pipeline or <code>null</code> if it couldn't be found
-         */
-        default @Nullable PostPipeline getPipeline(ResourceLocation name) {
-            return VeilRenderSystem.renderer().getPostProcessingManager().getPipeline(name);
+        default GpuFramebuffer requireFramebuffer(Identifier name) {
+            GpuFramebuffer target = this.getFramebuffer(name);
+            if (target == null) throw new IllegalArgumentException("Unknown post framebuffer: " + name);
+            return target;
         }
-
-        /**
-         * Retrieves a shader by name.
-         *
-         * @param name The name of the shader to get
-         * @return The registered shader or <code>null</code> if it couldn't be found
-         */
-        default @Nullable ShaderProgram getShader(ResourceLocation name) {
-            return VeilRenderSystem.renderer().getShaderManager().getShader(name);
-        }
+        void setColorMask(boolean red, boolean green, boolean blue, boolean alpha);
+        int colorMask();
+        void setDepthState(CompareOp comparison, boolean writeDepth);
+        CompareOp depthComparison();
+        boolean writeDepth();
+        void copy(GpuFramebuffer source, GpuFramebuffer target, boolean color, boolean depth, boolean linear);
+        GpuTextureView getDynamicTexture(DynamicBufferType type);
+        Scope pushScope();
+        @Nullable PostPipeline getPipeline(Identifier name);
+        interface Scope extends AutoCloseable { @Override void close(); }
     }
 }

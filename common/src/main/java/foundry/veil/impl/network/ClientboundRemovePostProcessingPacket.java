@@ -4,12 +4,12 @@ import foundry.veil.Veil;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.NotNull;
 
-public record ClientboundRemovePostProcessingPacket(ResourceLocation pipeline) implements CustomPacketPayload {
+public record ClientboundRemovePostProcessingPacket(Identifier pipeline) implements CustomPacketPayload {
 
-    public static final StreamCodec<ByteBuf, ClientboundRemovePostProcessingPacket> CODEC = ResourceLocation.STREAM_CODEC
+    public static final StreamCodec<ByteBuf, ClientboundRemovePostProcessingPacket> CODEC = Identifier.STREAM_CODEC
             .map(ClientboundRemovePostProcessingPacket::new, ClientboundRemovePostProcessingPacket::pipeline);
     public static final Type<ClientboundRemovePostProcessingPacket> TYPE = new Type<>(Veil.veilPath("remove_post_processing"));
 

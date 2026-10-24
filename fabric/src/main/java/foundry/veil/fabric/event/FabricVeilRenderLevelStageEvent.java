@@ -1,22 +1,17 @@
 package foundry.veil.fabric.event;
 
-import foundry.veil.api.event.VeilRegisterFixedBuffersEvent;
 import foundry.veil.api.event.VeilRenderLevelStageEvent;
 import net.fabricmc.fabric.api.event.Event;
 import net.fabricmc.fabric.api.event.EventFactory;
+import net.minecraft.resources.Identifier;
 
-/**
- * Fired for each render stage to draw arbitrarily to the screen. This is available as a last-resort if {@link VeilRegisterFixedBuffersEvent} doesn't fit the use case.
- *
- * @author Ocelot
- * @see FabricVeilRegisterFixedBuffersEvent
- */
+/** Native level-render phase event; no legacy immediate BufferSource or GL state. */
 @FunctionalInterface
 public interface FabricVeilRenderLevelStageEvent extends VeilRenderLevelStageEvent {
-
-    Event<VeilRenderLevelStageEvent> EVENT = EventFactory.createArrayBacked(VeilRenderLevelStageEvent.class, events -> (stage, levelRenderer, bufferSource, matrixStack, frustumMatrix, projectionMatrix, renderTick, deltaTracker, camera, frustum) -> {
-        for (VeilRenderLevelStageEvent event : events) {
-            event.onRenderLevelStage(stage, levelRenderer, bufferSource, matrixStack, frustumMatrix, projectionMatrix, renderTick, deltaTracker, camera, frustum);
-        }
-    });
+    /** Native draw/composite work runs after listeners in the default phase, regardless of registration order. */
+    Identifier FINAL_PHASE = Identifier.fromNamespaceAndPath("veil", "final_native_stage");
+    Event<VeilRenderLevelStageEvent> EVENT = EventFactory.createWithPhases(VeilRenderLevelStageEvent.class,
+            listeners -> (stage, context) -> {
+                for (VeilRenderLevelStageEvent listener : listeners) listener.onRenderLevelStage(stage, context);
+            }, Event.DEFAULT_PHASE, FINAL_PHASE);
 }

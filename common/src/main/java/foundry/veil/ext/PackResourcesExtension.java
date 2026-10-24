@@ -1,7 +1,7 @@
 package foundry.veil.ext;
 
 import foundry.veil.Veil;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
@@ -155,6 +155,6 @@ public interface PackResourcesExtension {
     @FunctionalInterface
     interface PackResourceConsumer {
 
-        void accept(@Nullable PackType packType, ResourceLocation name, Path packPath, Path filePath, @Nullable Path modResourcePath);
+        void accept(@Nullable PackType packType, Identifier name, Path packPath, Path filePath, @Nullable Path modResourcePath);
     }
 }

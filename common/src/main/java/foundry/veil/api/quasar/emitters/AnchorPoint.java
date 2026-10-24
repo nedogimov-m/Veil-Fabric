@@ -4,9 +4,11 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.LevelRenderer;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
+import foundry.veil.api.quasar.emitters.shape.EmitterShape;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -16,19 +18,19 @@ import org.joml.Vector4f;
 import java.util.List;
 
 public class AnchorPoint {
-    public static AnchorPoint TEST_POINT = new AnchorPoint(ResourceLocation.fromNamespaceAndPath("quasar", "test_point"));
-    private final ResourceLocation id;
+    public static AnchorPoint TEST_POINT = new AnchorPoint(Identifier.fromNamespaceAndPath("quasar", "test_point"));
+    private final Identifier id;
     public Vector3f localOffset = new Vector3f(0, 0, 0);
     public Vector3f worldOffset = new Vector3f(0, 0, 0);
     public List<ModelPart> modelParts = null;
     public Vector3f origin = new Vector3f(0, 0, 0);
     public Vector4f transformMatrix = new Vector4f();
 
-    public AnchorPoint(ResourceLocation id) {
+    public AnchorPoint(Identifier id) {
         this.id = id;
     }
 
-    public ResourceLocation getId() {
+    public Identifier getId() {
         return id;
     }
 
@@ -61,12 +63,13 @@ public class AnchorPoint {
         transformMatrix = offset;
     }
 
-    public void render(PoseStack stack, MultiBufferSource source, float scalar) {
+    public void render(PoseStack stack, SubmitNodeCollector submissions, float scalar) {
         stack.pushPose();
-        stack.translate(transformMatrix.x(), transformMatrix.y(), transformMatrix.z());
-        VertexConsumer consumer = source.getBuffer(RenderType.lines());
-        stack.scale(1 / 16f, 1 / 16f, 1 / 16f);
-        LevelRenderer.renderLineBox(stack, consumer, new AABB(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5), 1, 1, 1, 1);
-        stack.popPose();
+        try {
+            stack.translate(transformMatrix.x(), transformMatrix.y(), transformMatrix.z());
+            stack.scale(1 / 16f, 1 / 16f, 1 / 16f);
+            submissions.submitCustomGeometry(stack, RenderTypes.lines(), (pose, consumer) ->
+                    EmitterShape.renderBox(pose, consumer, new AABB(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5), 1, 1, 1, 1));
+        } finally { stack.popPose(); }
     }
 }

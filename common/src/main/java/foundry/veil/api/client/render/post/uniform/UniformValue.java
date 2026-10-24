@@ -3,7 +3,7 @@ package foundry.veil.api.client.render.post.uniform;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.MapCodec;
-import foundry.veil.api.client.render.shader.uniform.ShaderUniform;
+import foundry.veil.api.client.render.gpu.GpuUniformBuffer;
 
 import java.util.Arrays;
 import java.util.Locale;
@@ -13,7 +13,29 @@ public sealed interface UniformValue permits FloatUniform, IntUniform, Matrix2Un
 
     Codec<UniformValue> CODEC = Type.CODEC.dispatch(UniformValue::type, Type::getCodec);
 
-    void apply(ShaderUniform uniform);
+    void apply(GpuUniformBuffer uniform, String name);
+
+    default GpuUniformBuffer.ValueType valueType() {
+        return switch (this) {
+            case FloatUniform value -> switch (value.values().length) {
+                case 1 -> GpuUniformBuffer.ValueType.FLOAT;
+                case 2 -> GpuUniformBuffer.ValueType.VEC2;
+                case 3 -> GpuUniformBuffer.ValueType.VEC3;
+                case 4 -> GpuUniformBuffer.ValueType.VEC4;
+                default -> throw new IllegalArgumentException("Float uniforms require one to four components");
+            };
+            case IntUniform value -> switch (value.values().length) {
+                case 1 -> GpuUniformBuffer.ValueType.INT;
+                case 2 -> GpuUniformBuffer.ValueType.IVEC2;
+                case 3 -> GpuUniformBuffer.ValueType.IVEC3;
+                case 4 -> GpuUniformBuffer.ValueType.IVEC4;
+                default -> throw new IllegalArgumentException("Integer uniforms require one to four components");
+            };
+            case Matrix2Uniform ignored -> GpuUniformBuffer.ValueType.MAT2;
+            case Matrix3Uniform ignored -> GpuUniformBuffer.ValueType.MAT3;
+            case Matrix4Uniform ignored -> GpuUniformBuffer.ValueType.MAT4;
+        };
+    }
 
     Type type();
 

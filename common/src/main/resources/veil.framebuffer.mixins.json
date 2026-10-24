@@ -2,11 +2,9 @@
   "required": true,
   "minVersion": "0.8",
   "package": "foundry.veil.mixin.framebuffer",
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_25",
   "plugin": "foundry.veil.VeilMixinPluginImpl",
-  "client": [
-    "accessor.FramebufferRenderTargetAccessor"
-  ],
+  "client": [],
   "injectors": {
     "defaultRequire": 1
   }

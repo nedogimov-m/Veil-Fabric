@@ -1,6 +1,6 @@
 package foundry.veil.api.resource;
 
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.Resource;
 import org.jetbrains.annotations.Nullable;
@@ -24,7 +24,7 @@ import java.util.Optional;
  * @see VeilResource
  */
 public record VeilResourceInfo(PackType packType,
-                               ResourceLocation location,
+                               Identifier location,
                                Path filePath,
                                @Nullable Path modResourcePath,
                                boolean hidden) {

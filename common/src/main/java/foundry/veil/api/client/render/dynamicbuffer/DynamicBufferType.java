@@ -2,6 +2,7 @@ package foundry.veil.api.client.render.dynamicbuffer;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
+import com.mojang.renderpearl.api.GpuFormat;
 import foundry.veil.api.client.render.framebuffer.FramebufferAttachmentDefinition;
 import io.github.ocelot.glslprocessor.api.grammar.GlslTypeSpecifier;
 import io.github.ocelot.glslprocessor.api.visitor.GlslNodeStringWriter;
@@ -18,9 +19,9 @@ import java.util.stream.Collectors;
  */
 public enum DynamicBufferType {
     ALBEDO("Albedo", GlslTypeSpecifier.BuiltinType.VEC4, FramebufferAttachmentDefinition.Format.RGBA8),
-    NORMAL("Normal", GlslTypeSpecifier.BuiltinType.VEC4, FramebufferAttachmentDefinition.Format.RGB8_SNORM),
+    NORMAL("Normal", GlslTypeSpecifier.BuiltinType.VEC4, FramebufferAttachmentDefinition.Format.RGBA8_SNORM),
     LIGHT_UV("LightUV", GlslTypeSpecifier.BuiltinType.VEC4, FramebufferAttachmentDefinition.Format.RG8),
-    LIGHT_COLOR("LightColor", GlslTypeSpecifier.BuiltinType.VEC4, FramebufferAttachmentDefinition.Format.RGB8),
+    LIGHT_COLOR("LightColor", GlslTypeSpecifier.BuiltinType.VEC4, FramebufferAttachmentDefinition.Format.RGBA8),
     DEBUG("Debug", GlslTypeSpecifier.BuiltinType.VEC4, FramebufferAttachmentDefinition.Format.RGBA16F);
 
     private static final DynamicBufferType[] BUFFERS = values();
@@ -47,8 +48,7 @@ public enum DynamicBufferType {
     private final String macroName;
     private final GlslTypeSpecifier.BuiltinType type;
     private final String typeGlsl;
-    private final int internalFormat;
-    private final int texelFormat;
+    private final GpuFormat format;
     private final int mask;
 
     DynamicBufferType(String sourceName, GlslTypeSpecifier.BuiltinType type, FramebufferAttachmentDefinition.Format format) {
@@ -59,8 +59,7 @@ public enum DynamicBufferType {
         GlslNodeStringWriter writer = new GlslNodeStringWriter(true);
         writer.visitTypeSpecifier(type);
         this.typeGlsl = writer.toString();
-        this.internalFormat = format.getInternalFormat();
-        this.texelFormat = format.getFormat();
+        this.format = format.gpuFormat();
         this.mask = 1 << this.ordinal();
     }
 
@@ -103,17 +102,10 @@ public enum DynamicBufferType {
     }
 
     /**
-     * @return The OpenGL internal format of the texture
+     * @return The native render attachment format
      */
-    public int getInternalFormat() {
-        return this.internalFormat;
-    }
-
-    /**
-     * @return The OpenGL format of data assigned to the texture
-     */
-    public int getTexelFormat() {
-        return this.texelFormat;
+    public GpuFormat gpuFormat() {
+        return this.format;
     }
 
     /**

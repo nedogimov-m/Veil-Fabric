@@ -12,18 +12,18 @@ import foundry.veil.api.quasar.emitters.module.update.TickSubEmitterModule;
 import foundry.veil.api.quasar.particle.ParticleModuleSet;
 import imgui.ImGui;
 import imgui.type.ImString;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 public final class TickSubEmitterModuleData implements ParticleModuleData, EditorAttributeProvider {
 
     public static final MapCodec<TickSubEmitterModuleData> CODEC = RecordCodecBuilder.mapCodec(instance -> instance.group(
-            ResourceLocation.CODEC.fieldOf("subemitter").forGetter(TickSubEmitterModuleData::subEmitter),
+            Identifier.CODEC.fieldOf("subemitter").forGetter(TickSubEmitterModuleData::subEmitter),
             Codec.INT.fieldOf("frequency").forGetter(TickSubEmitterModuleData::frequency)
     ).apply(instance, TickSubEmitterModuleData::new));
-    private ResourceLocation subEmitter;
+    private Identifier subEmitter;
     private int frequency;
 
-    public TickSubEmitterModuleData(ResourceLocation subEmitter, int frequency) {
+    public TickSubEmitterModuleData(Identifier subEmitter, int frequency) {
         this.subEmitter = subEmitter;
         this.frequency = frequency;
     }
@@ -44,8 +44,8 @@ public final class TickSubEmitterModuleData implements ParticleModuleData, Edito
 
         if (ImGui.inputTextWithHint("subemitter", "namespace:path", textInput)) {
             try {
-                ResourceLocation location = ResourceLocation.parse(textInput.get());
-                QuasarParticles.registryAccess().registry(QuasarParticles.EMITTER).map(registry -> registry.get(location))
+                Identifier location = Identifier.parse(textInput.get());
+                QuasarParticles.registryAccess().lookup(QuasarParticles.EMITTER).map(registry -> registry.getValue(location))
                         .ifPresent(data -> this.subEmitter = location);
             } catch (Exception ignored) {}
         }
@@ -54,7 +54,7 @@ public final class TickSubEmitterModuleData implements ParticleModuleData, Edito
         if (ImGui.dragInt("frequency", editFrequency, 0.01F, 1, Integer.MAX_VALUE)) frequency = Math.max(editFrequency[0], 1);
     }
 
-    public ResourceLocation subEmitter() {
+    public Identifier subEmitter() {
         return subEmitter;
     }
 

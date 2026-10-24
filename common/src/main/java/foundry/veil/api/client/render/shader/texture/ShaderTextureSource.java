@@ -3,144 +3,44 @@ package foundry.veil.api.client.render.shader.texture;
 import com.mojang.datafixers.util.Either;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
-import foundry.veil.Veil;
-import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.VeilRenderer;
-import foundry.veil.api.client.render.dynamicbuffer.DynamicBufferType;
-import foundry.veil.api.client.render.framebuffer.AdvancedFbo;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import com.mojang.renderpearl.api.textures.GpuSampler;
+import foundry.veil.api.client.render.gpu.GpuFramebuffer;
 import foundry.veil.api.client.render.texture.TextureFilter;
 import foundry.veil.api.util.EnumCodec;
-import foundry.veil.ext.AbstractTextureExtension;
-import foundry.veil.impl.client.render.dynamicbuffer.DynamicBufferManager;
 import net.minecraft.client.Minecraft;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.client.renderer.texture.AbstractTexture;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
 
-import static org.lwjgl.opengl.GL11C.GL_TEXTURE_2D;
-
-/**
- * Source for shader textures. This allows resource location textures as well as other special types.
- *
- * @author Ocelot
- */
+/** Resource-defined texture views; resolution never exposes backend integer IDs. */
 public sealed interface ShaderTextureSource permits LocationSource, FramebufferSource {
-
-    Codec<ShaderTextureSource> CODEC = Codec.either(ResourceLocation.CODEC,
+    Codec<ShaderTextureSource> CODEC = Codec.either(Identifier.CODEC,
                     Type.CODEC.<ShaderTextureSource>dispatch(ShaderTextureSource::type, Type::codec))
-            .xmap(either -> either.map(name -> new LocationSource(name, null), right -> right),
-                    source -> source instanceof LocationSource loc ? Either.left(loc.location()) : Either.right(source));
-
-    Context GLOBAL_CONTEXT = name -> VeilRenderSystem.renderer().getFramebufferManager().getFramebuffer(name);
-
-    /**
-     * Retrieves the id of this texture based on context.
-     *
-     * @param context The context to use
-     * @return The id of the texture to bind
-     */
-    int getId(Context context);
-
-    /**
-     * Retrieves the target of this texture based on context.
-     *
-     * @param context The context to use
-     * @return The target of the bound texture
-     * @since 3.6.0
-     */
-    int getTarget(Context context);
-
-    /**
-     * @return The filtering this texture should use or <code>null</code> for the texture default
-     */
-    @Nullable
-    TextureFilter filter();
-
-    /**
-     * @return The type of shader texture this is
-     */
+            .xmap(either -> either.map(name -> new LocationSource(name, null), source -> source),
+                    source -> source instanceof LocationSource location && location.filter() == null
+                            ? Either.left(location.location()) : Either.right(source));
+    GpuTextureView getTexture(Context context);
+    @Nullable TextureFilter filter();
     Type type();
 
-    /**
-     * Types of post textures that can be used.
-     *
-     * @author Ocelot
-     */
     enum Type {
-        LOCATION(LocationSource.CODEC),
-        FRAMEBUFFER(FramebufferSource.CODEC);
-
+        LOCATION(LocationSource.CODEC), FRAMEBUFFER(FramebufferSource.CODEC);
         private final MapCodec<? extends ShaderTextureSource> codec;
-
         public static final Codec<Type> CODEC = EnumCodec.<Type>builder("texture type").values(Type.class).build();
-
-        Type(MapCodec<? extends ShaderTextureSource> codec) {
-            this.codec = codec;
-        }
-
-        /**
-         * @return The codec for this specific type
-         */
-        public MapCodec<? extends ShaderTextureSource> codec() {
-            return this.codec;
-        }
+        Type(MapCodec<? extends ShaderTextureSource> codec) { this.codec = codec; }
+        public MapCodec<? extends ShaderTextureSource> codec() { return this.codec; }
     }
 
-    /**
-     * Context for applying shader textures.
-     *
-     * @author Ocelot
-     */
     @FunctionalInterface
     interface Context {
-
-        /**
-         * Retrieves a framebuffer by id.
-         *
-         * @param name The name of the framebuffer to retrieve
-         * @return The framebuffer with that id or <code>null</code> if it was not found
-         */
-        @Nullable AdvancedFbo getFramebuffer(ResourceLocation name);
-
-        /**
-         * Retrieves a texture by id.
-         *
-         * @param name The name of the texture to retrieve
-         * @return The texture with that id or the missing texture if it was not found
-         */
-        default int getTexture(ResourceLocation name) {
-            if (Veil.MODID.equals(name.getNamespace()) && name.getPath().startsWith("dynamic_buffer")) {
-                DynamicBufferManager bufferManger = VeilRenderSystem.renderer().getDynamicBufferManger();
-                if (name.equals(VeilRenderer.ALBEDO_BUFFER_TEXTURE)) {
-                    return bufferManger.getBufferTexture(DynamicBufferType.ALBEDO);
-                }
-                if (name.equals(VeilRenderer.NORMAL_BUFFER_TEXTURE)) {
-                    return bufferManger.getBufferTexture(DynamicBufferType.NORMAL);
-                }
-                if (name.equals(VeilRenderer.LIGHT_UV_BUFFER_TEXTURE)) {
-                    return bufferManger.getBufferTexture(DynamicBufferType.LIGHT_UV);
-                }
-                if (name.equals(VeilRenderer.LIGHT_COLOR_BUFFER_TEXTURE)) {
-                    return bufferManger.getBufferTexture(DynamicBufferType.LIGHT_COLOR);
-                }
-                if (name.equals(VeilRenderer.DEBUG_BUFFER_TEXTURE)) {
-                    return bufferManger.getBufferTexture(DynamicBufferType.DEBUG);
-                }
-            }
-            return Minecraft.getInstance().getTextureManager().getTexture(name).getId();
+        @Nullable GpuFramebuffer getFramebuffer(Identifier name);
+        default AbstractTexture getTextureResource(Identifier name) {
+            return Minecraft.getInstance().getTextureManager().getTexture(name);
         }
-
-        /**
-         * Retrieves a texture target by id.
-         *
-         * @param name The name of the texture to retrieve
-         * @return The target for that texture
-         * @since 3.6.0
-         */
-        default int getTextureTarget(ResourceLocation name) {
-            if (Veil.MODID.equals(name.getNamespace()) && name.getPath().startsWith("dynamic_buffer")) {
-                return GL_TEXTURE_2D;
-            }
-            return ((AbstractTextureExtension) Minecraft.getInstance().getTextureManager().getTexture(name)).getTextureTarget();
-        }
+        default GpuTextureView getTexture(Identifier name) { return this.getTextureResource(name).getTextureView(); }
+        default GpuSampler getSampler(Identifier name) { return this.getTextureResource(name).getSampler(); }
+        /** Framebuffer-specific sampling settings are supplied by its resource manager. */
+        default TextureFilter framebufferFilter(Identifier name, int colorAttachment, boolean depth) { return TextureFilter.CLAMP; }
     }
 }

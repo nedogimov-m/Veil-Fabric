@@ -5,7 +5,6 @@ import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexSorting;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.JsonOps;
 import foundry.veil.api.client.imgui.VeilImGuiUtil;
@@ -54,6 +53,7 @@ public class EffectInspector implements ResourceFileEditor<FlareResource>, Effec
     private float cameraDistance;
 
     private @Nullable FlareEffectTemplate template;
+    private foundry.veil.api.client.render.gpu.NativeFeatureScene nativeScene;
 
     public EffectInspector(VeilEditorEnvironment environment, FlareResource resource) {
         this.open = new ImBoolean(true);
@@ -105,7 +105,7 @@ public class EffectInspector implements ResourceFileEditor<FlareResource>, Effec
                 return;
             }
 
-            int texture = VeilImGuiUtil.renderArea(desiredWidth, desiredHeight, fbo -> {
+            var texture = VeilImGuiUtil.renderArea(desiredWidth, desiredHeight, fbo -> {
 
                 Quaterniond cameraOrientation = new Quaterniond().rotateX(this.offsetXRot).rotateY(this.offsetYRot);
                 Vector3d cameraPos = cameraOrientation.transformInverse(new Vector3d(0.0, 0.0, this.cameraDistance)).add(0.0, 0.0, 0.0);
@@ -113,32 +113,30 @@ public class EffectInspector implements ResourceFileEditor<FlareResource>, Effec
                 Matrix4f viewMatrix = new Matrix4f().rotate(new Quaternionf(cameraOrientation)).translate((float) -cameraPos.x, (float) -cameraPos.y, (float) -cameraPos.z);
 
                 float aspect = (float) desiredWidth / (float) desiredHeight;
-                Matrix4f projMat = new Matrix4f().perspective((float) Math.toRadians(40.0), aspect, 0.3f, 1000.0f);
+                Matrix4f projMat = new Matrix4f().perspective((float) Math.toRadians(40.0), aspect, 1000.0f, 0.3f, RenderSystem.getDevice().getDeviceInfo().isZZeroToOne());
+                if (RenderSystem.getDevice().getDeviceInfo().backendName().toLowerCase(java.util.Locale.ROOT).contains("vulkan")) projMat.m11(-projMat.m11());
                 Matrix4f modelView = new Matrix4f().mul(viewMatrix);
 
                 if (this.template == null) {
                     return;
                 }
-                Matrix4fStack stack = RenderSystem.getModelViewStack();
-
-                stack.pushMatrix();
-                stack.set(modelView);
-                RenderSystem.applyModelViewMatrix();
-                RenderSystem.backupProjectionMatrix();
-                RenderSystem.setProjectionMatrix(projMat, VertexSorting.ORTHOGRAPHIC_Z);
-
-                this.template.render(this, (MatrixStack) POSE_STACK, 0.0f, null);
-
-                stack.popMatrix();
-                RenderSystem.restoreProjectionMatrix();
-                RenderSystem.applyModelViewMatrix();
+                var client = net.minecraft.client.Minecraft.getInstance();
+                if (this.nativeScene == null) this.nativeScene = new foundry.veil.api.client.render.gpu.NativeFeatureScene(client, client.getResourceManager());
+                var inputs = foundry.veil.api.client.render.gpu.NativeFeatureScene.Inputs.capture(client);
+                inputs.options().improvedTransparency = false;
+                this.nativeScene.render(fbo, projMat, com.mojang.blaze3d.ProjectionType.PERSPECTIVE, modelView, inputs, collector -> {
+                    try (var capture = foundry.veil.impl.client.render.rendertype.NativeRenderTypeDraws.beginCapture(fbo)) {
+                        this.template.render(this, (MatrixStack) POSE_STACK, 0.0f, null);
+                        capture.submit(RenderSystem.getDevice().createCommandEncoder());
+                    }
+                });
             });
 
             if (ImGui.beginChild("3D View", desiredWidth / 2.0F + 2, desiredHeight / 2.0F + 2, false, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoMove)) {
                 if (ImGui.isWindowHovered()) {
                     this.applyCameraChanges();
                 }
-                ImGui.imageWithBg(texture, desiredWidth / 2.0F, desiredHeight / 2.0F, 0, 1, 1, 0, 1.0F, 1.0F, 1.0F, 0.1F, 1.0F, 1.0F, 1.0F, 1.0F);
+                foundry.imgui.api.ImGuiMC.imageWithBg(foundry.imgui.api.ImGuiMC.getTexture(texture), desiredWidth / 2.0F, desiredHeight / 2.0F, 0, 1, 1, 0, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 0.1F);
             }
             ImGui.endChild();
         }
@@ -168,11 +166,13 @@ public class EffectInspector implements ResourceFileEditor<FlareResource>, Effec
 
     @Override
     public void close() {
+        if (this.nativeScene != null) { this.nativeScene.close(); this.nativeScene = null; }
         EffectHost.super.close();
     }
 
     @Override
     public void loadFromDisk() {
+        if (this.nativeScene != null) { this.nativeScene.close(); this.nativeScene = null; }
         try (Reader reader = this.resource.resourceInfo().openAsReader(this.resourceManager)) {
             JsonElement element = JsonParser.parseReader(reader);
             DataResult<FlareEffectTemplate> result = FlareEffectTemplate.CODEC.parse(JsonOps.INSTANCE, element);

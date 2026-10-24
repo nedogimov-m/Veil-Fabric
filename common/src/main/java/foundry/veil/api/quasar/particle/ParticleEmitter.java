@@ -7,12 +7,12 @@ import foundry.veil.api.quasar.data.*;
 import foundry.veil.api.quasar.data.module.CodeModule;
 import foundry.veil.api.quasar.data.module.ParticleModuleData;
 import foundry.veil.api.quasar.emitters.module.update.FaceVelocityModule;
-import net.minecraft.client.Camera;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.renderer.LightTexture;
-import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.util.LightCoordsUtil;
+import foundry.veil.api.client.render.VertexSource;
 import net.minecraft.core.Holder;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
@@ -20,9 +20,11 @@ import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.UnmodifiableView;
-import org.joml.*;
+import org.joml.Vector3d;
+import org.joml.Vector3dc;
+import org.joml.Vector3f;
+import org.joml.Vector3fc;
 
-import java.lang.Math;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
@@ -51,7 +53,6 @@ public class ParticleEmitter {
     private final List<ParticleModuleData> modulesView;
     private final RandomSource randomSource;
     private final Vector3d position;
-    private final Quaternionf rotation;
     private final Vector3d offset;
     private final List<QuasarParticle> particles;
 
@@ -79,7 +80,6 @@ public class ParticleEmitter {
         this.modulesView = Collections.unmodifiableList(this.modules);
         this.randomSource = RandomSource.create();
         this.position = new Vector3d();
-        this.rotation = new Quaternionf();
         this.offset = new Vector3d();
         this.particles = new LinkedList<>();
 
@@ -115,9 +115,9 @@ public class ParticleEmitter {
         this.particleManager.reserve(count);
 
         for (int i = 0; i < count; i++) {
-            Vector3dc particlePos = this.emitterShapeSettings.get(i % this.emitterShapeSettings.size()).getPos(this.randomSource, this.getPosition(), this.getRotation());
-            Vector3fc particleDirection = this.particleSettings.particleDirection(this.randomSource).rotate(this.getRotation());
-            Vector3fc particleRotation = this.particleSettings.initialRotation(this.randomSource).mul(Mth.DEG_TO_RAD, new Vector3f()).add(this.getRotation().getEulerAnglesXYZ(new Vector3f()));
+            Vector3dc particlePos = this.emitterShapeSettings.get(i % this.emitterShapeSettings.size()).getPos(this.randomSource, this.position);
+            Vector3fc particleDirection = this.particleSettings.particleDirection(this.randomSource);
+            Vector3fc particleRotation = this.particleSettings.initialRotation(this.randomSource).mul(Mth.DEG_TO_RAD, new Vector3f());
 
             // TODO
 //        this.getParticleData().getInitModules().stream().filter(force -> force instanceof InitialVelocityForce).forEach(f -> {
@@ -154,7 +154,7 @@ public class ParticleEmitter {
         for (Holder<ParticleModuleData> module : allModules) {
             if (!module.isBound()) {
                 if (REPORTED_MODULES.add(module)) {
-                    Veil.LOGGER.error("Unknown module: {}", (module instanceof Holder.Reference<ParticleModuleData> ref ? ref.key().location() : module.getClass().getName()));
+                    Veil.LOGGER.error("Unknown module: {}", (module instanceof Holder.Reference<ParticleModuleData> ref ? ref.key().identifier() : module.getClass().getName()));
                 }
                 continue;
             }
@@ -224,7 +224,7 @@ public class ParticleEmitter {
 
     // TODO move to renderer
     @ApiStatus.Internal
-    public void render(MatrixStack matrixStack, MultiBufferSource bufferSource, Camera camera, float partialTicks) {
+    public void render(MatrixStack matrixStack, VertexSource bufferSource, CameraRenderState camera, float partialTicks) {
         if (this.particles.isEmpty()) {
             return;
         }
@@ -234,14 +234,14 @@ public class ParticleEmitter {
             return;
         }
 
-        Vec3 projectedView = camera.getPosition();
+        Vec3 projectedView = camera.pos;
 
         for (QuasarParticle particle : this.particles) {
             RenderData renderData = particle.getRenderData();
 
             particle.render(partialTicks);
 
-            renderData.renderTrails(matrixStack, bufferSource, projectedView, LightTexture.FULL_BRIGHT, partialTicks);
+            renderData.renderTrails(matrixStack, bufferSource, projectedView, LightCoordsUtil.FULL_BRIGHT, partialTicks);
         }
         renderStyle.render(this.particles, camera);
 
@@ -328,7 +328,7 @@ public class ParticleEmitter {
         this.removeTask = this.particleManager.getScheduler().schedule(this::expire, this.maxLifetime).toCompletableFuture();
     }
 
-    public @Nullable ResourceLocation getRegistryName() {
+    public @Nullable Identifier getRegistryName() {
         return this.emitterData.getRegistryId();
     }
 
@@ -344,15 +344,6 @@ public class ParticleEmitter {
      */
     public Vector3d getPosition() {
         return this.position;
-    }
-
-    /**
-     * Rotation of the emitter
-     *
-     * @since 4.5.0
-     */
-    public Quaternionf getRotation() {
-        return this.rotation;
     }
 
     public ParticleEmitterData getData() {
@@ -438,28 +429,6 @@ public class ParticleEmitter {
         } else {
             this.position.set(this.offset);
         }
-    }
-
-    /**
-     * Sets the rotation of the particle emitter.
-     *
-     * @param x The rotation about the X axis, in radians.
-     * @param y The rotation about the Y axis, in radians.
-     * @param z The rotation about the Z axis, in radians.
-     * @since 4.5.0
-     */
-    public void setRotation(float x, float y, float z) {
-        this.rotation.identity().rotateLocalX(x).rotateLocalY(y).rotateLocalZ(z);
-    }
-
-    /**
-     * Sets the rotation of the particle emitter.
-     *
-     * @param rotation The rotation of the emitter.
-     * @since 4.5.0
-     */
-    public void setRotation(Quaternionfc rotation) {
-        this.rotation.set(rotation);
     }
 
     public void setMaxLifetime(int maxLifetime) {

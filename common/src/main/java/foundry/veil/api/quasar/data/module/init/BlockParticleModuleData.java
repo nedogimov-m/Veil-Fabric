@@ -27,14 +27,14 @@ public final class BlockParticleModuleData implements ParticleModuleData, Editor
         builder.addModule((InitParticleModule) particle -> {
             BlockState state = particle.getBlockStateInOrUnder();
             if (!state.isAir()) {
-                particle.getRenderData().setAtlasSprite(Minecraft.getInstance().getBlockRenderer().getBlockModelShaper().getParticleIcon(state));
+                particle.getRenderData().setAtlasSprite(Minecraft.getInstance().getModelManager().getBlockStateModelSet().getParticleMaterial(state).sprite());
             }
         });
         if (this.dynamic) {
             builder.addModule((UpdateParticleModule) particle -> {
                 BlockState state = particle.getBlockStateInOrUnder();
                 if (!state.isAir()) {
-                    particle.getRenderData().setAtlasSprite(Minecraft.getInstance().getBlockRenderer().getBlockModelShaper().getParticleIcon(state));
+                    particle.getRenderData().setAtlasSprite(Minecraft.getInstance().getModelManager().getBlockStateModelSet().getParticleMaterial(state).sprite());
                 }
             });
         }

@@ -2,7 +2,7 @@ package foundry.veil.api.client.render.post.uniform;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
-import foundry.veil.api.client.render.shader.uniform.ShaderUniform;
+import foundry.veil.api.client.render.gpu.GpuUniformBuffer;
 
 import java.util.Arrays;
 
@@ -13,8 +13,8 @@ public record IntUniform(int[] values) implements UniformValue {
                     uniform -> Arrays.stream(uniform.values).boxed().toList()).fieldOf("value");
 
     @Override
-    public void apply(ShaderUniform uniform) {
-        uniform.setVectorI(this.values);
+    public void apply(GpuUniformBuffer uniform, String name) {
+        uniform.setVectorI(name, this.values);
     }
 
     @Override

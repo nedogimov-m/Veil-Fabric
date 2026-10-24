@@ -3,19 +3,17 @@ package foundry.veil.api.client.imgui;
 
 import foundry.imgui.api.ImGuiMC;
 import foundry.veil.Veil;
-import foundry.veil.api.client.editor.EditorManager;
-import foundry.veil.api.client.render.framebuffer.AdvancedFbo;
-import foundry.veil.impl.client.imgui.AdvancedFboImGuiAreaImpl;
+import foundry.veil.api.client.render.gpu.GpuFramebuffer;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import foundry.veil.impl.client.imgui.NativeImGuiAreas;
 import imgui.ImFont;
 import imgui.ImGui;
 import imgui.ImVec4;
 import imgui.flag.ImGuiCol;
 import imgui.flag.ImGuiStyleVar;
 import net.minecraft.client.StringSplitter;
-import net.minecraft.network.chat.FormattedText;
-import net.minecraft.network.chat.Style;
-import net.minecraft.resources.ResourceLocation;
-import org.jetbrains.annotations.ApiStatus;
+import net.minecraft.network.chat.*;
+import net.minecraft.resources.Identifier;
 
 import java.util.function.Consumer;
 
@@ -26,7 +24,8 @@ import java.util.function.Consumer;
  */
 public class VeilImGuiUtil {
 
-    public static final ResourceLocation ICON_FONT = Veil.veilPath("remixicon");
+
+    public static final Identifier ICON_FONT = Veil.veilPath("remixicon");
 
     /**
      * Displays a (?) with a hover tooltip. Useful for example information.
@@ -51,7 +50,7 @@ public class VeilImGuiUtil {
      */
     public static void setTooltip(FormattedText text) {
         ImGui.beginTooltip();
-        ImGuiMC.component(text);
+        component(text);
         ImGui.endTooltip();
     }
 
@@ -59,12 +58,9 @@ public class VeilImGuiUtil {
      * Fully renders Minecraft text into ImGui.
      *
      * @param text The text to render
-     * @deprecated Use {@link ImGuiMC#component(FormattedText)} instead
      */
-    @ApiStatus.ScheduledForRemoval(inVersion = "5.0.0")
-    @Deprecated
     public static void component(FormattedText text) {
-        ImGuiMC.component(text);
+        component(text, Float.POSITIVE_INFINITY);
     }
 
     /**
@@ -72,12 +68,9 @@ public class VeilImGuiUtil {
      *
      * @param text      The text to render
      * @param wrapWidth The width to wrap to
-     * @deprecated Use {@link ImGuiMC#component(FormattedText, float)} instead
      */
-    @ApiStatus.ScheduledForRemoval(inVersion = "5.0.0")
-    @Deprecated
     public static void component(FormattedText text, float wrapWidth) {
-        ImGuiMC.component(text, wrapWidth);
+        ImGuiMC.component(text,wrapWidth);
     }
 
     /**
@@ -86,7 +79,7 @@ public class VeilImGuiUtil {
      * @param code The icon code (ex. &#xED0F;)
      */
     public static void icon(int code) {
-        ImGui.pushFont(ImGuiMC.getFont(ICON_FONT, false, false), 0);
+        ImGui.pushFont(ImGuiMC.getFont(ICON_FONT, false, false),0);
         ImGui.text("" + (char) code);
         ImGui.popFont();
     }
@@ -98,7 +91,7 @@ public class VeilImGuiUtil {
      * @param color The color of the icon
      */
     public static void icon(int code, int color) {
-        ImGui.pushFont(ImGuiMC.getFont(ICON_FONT, false, false), 0);
+        ImGui.pushFont(ImGuiMC.getFont(ICON_FONT, false, false),0);
         ImGui.textColored(color, "" + (char) code);
         ImGui.popFont();
     }
@@ -119,7 +112,7 @@ public class VeilImGuiUtil {
      *
      * @param loc The resource location
      */
-    public static void resourceLocation(ResourceLocation loc) {
+    public static void resourceLocation(Identifier loc) {
         ImGui.beginGroup();
         ImGui.textColored(colorOf(loc.getNamespace()), loc.getNamespace() + ":");
 
@@ -152,16 +145,14 @@ public class VeilImGuiUtil {
      * @param width    The width of the area
      * @param height   The height of the area
      * @param renderer The renderer inside the area
-     * @return A texture ID that can be displayed in ImGui
+     * @return The genuine native color view that can be displayed in ImGui
      */
-    public static int renderArea(int width, int height, Consumer<AdvancedFbo> renderer) {
-        ImVec4 colors = ImGui.getStyle().getColors()[ImGuiCol.FrameBg];
-        AdvancedFbo fbo = AdvancedFboImGuiAreaImpl.allocate(width, height);
-        fbo.bind(true);
-        fbo.clear(colors.x, colors.y, colors.z, colors.w, fbo.getClearMask());
-        renderer.accept(fbo);
-        AdvancedFbo.unbind();
-        return fbo.getColorTextureAttachment(0).getId();
+    public static GpuTextureView renderArea(int width,int height,Consumer<GpuFramebuffer> renderer) {
+        final var colors=ImGui.getStyle().getColors()[ImGuiCol.FrameBg];
+        final var framebuffer=NativeImGuiAreas.allocate(width,height);
+        final var encoder=com.mojang.blaze3d.systems.RenderSystem.getDevice().createCommandEncoder();
+        framebuffer.clear(encoder,new org.joml.Vector4f(colors.x,colors.y,colors.z,colors.w),com.mojang.blaze3d.systems.RenderSystem.DEFAULT_DEPTH_CLEAR_VALUE);
+        encoder.submit();renderer.accept(framebuffer);return framebuffer.color(0).view();
     }
 
     /**
@@ -189,12 +180,9 @@ public class VeilImGuiUtil {
      *
      * @param style The style to get the font for
      * @return The ImFont to use
-     * @deprecated Use {@link ImGuiMC#getStyleFont(Style)} instead
      */
-    @ApiStatus.ScheduledForRemoval(inVersion = "5.0.0")
-    @Deprecated
     public static ImFont getStyleFont(Style style) {
-        return ImGuiMC.getFont(Style.DEFAULT_FONT.equals(style.getFont()) ? EditorManager.DEFAULT_FONT : style.getFont(), style.isBold(), style.isItalic());
+        return ImGuiMC.getStyleFont(style);
     }
 
     /**
@@ -202,10 +190,7 @@ public class VeilImGuiUtil {
      *
      * @param color The ImGui color index
      * @return The ARGB ImGui color
-     * @deprecated Use {@link ImGuiMC#getColor(int)} instead
      */
-    @ApiStatus.ScheduledForRemoval(inVersion = "5.0.0")
-    @Deprecated
     public static int getColor(int color) {
         ImVec4 colors = ImGui.getStyle().getColors()[color];
         return (int) (colors.w * 255) << 24 | (int) (colors.x * 255) << 16 | (int) (colors.y * 255) << 8 | (int) (colors.z * 255);
@@ -213,11 +198,9 @@ public class VeilImGuiUtil {
 
     /**
      * @return A string splitter for ImGui fonts
-     * @deprecated Use {@link ImGuiMC#getStringSplitter()} instead
      */
-    @ApiStatus.ScheduledForRemoval(inVersion = "5.0.0")
-    @Deprecated
     public static StringSplitter getStringSplitter() {
         return ImGuiMC.getStringSplitter();
     }
+
 }

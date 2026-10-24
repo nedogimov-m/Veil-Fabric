@@ -12,12 +12,12 @@ import org.joml.Vector3fc;
 public class Point implements EmitterShape {
 
     @Override
-    public Vector3d getPoint(RandomSource randomSource, Vector3fc dimensions, Vector3fc shapeRotation, Vector3dc position, boolean fromSurface) {
+    public Vector3d getPoint(RandomSource randomSource, Vector3fc dimensions, Vector3fc rotation, Vector3dc position, boolean fromSurface) {
         return new Vector3d(position);
     }
 
     @Override
     public void renderShape(PoseStack stack, VertexConsumer consumer, Vector3fc dimensions, Vector3fc rotation) {
-        LevelRenderer.renderLineBox(stack, consumer, new AABB(-0.01, -0.01, -0.01, 0.01, 0.01, 0.01), 0.15f, 0.15f, 1, 1);
+        EmitterShape.renderBox(stack.last(), consumer, new AABB(-0.01, -0.01, -0.01, 0.01, 0.01, 0.01), 0.15f, 0.15f, 1, 1);
     }
 }

@@ -1,47 +1,54 @@
 package foundry.veil.api.client.render.shader.compiler;
 
-import foundry.veil.api.client.render.shader.program.ShaderProgram;
-import foundry.veil.api.client.render.shader.uniform.ShaderUniform;
-import it.unimi.dsi.fastutil.objects.Object2IntMap;
-import net.minecraft.resources.ResourceLocation;
-import org.jetbrains.annotations.Nullable;
-import org.lwjgl.system.NativeResource;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import foundry.veil.api.client.render.gpu.GpuPipeline;
+import net.minecraft.resources.Identifier;
 
+import java.util.Objects;
 import java.util.Set;
 
-import static org.lwjgl.opengl.GL20C.glDeleteShader;
+/** A distinct lease on a genuine compiled native pipeline; every lease closes independently. */
+public final class CompiledShader implements AutoCloseable {
+    private final Shared owner;
+    private boolean closed;
 
-/**
- * A shader instance that has additional pre-compiled data.
- * {@link #apply(ShaderProgram)} should be called after this shader is attached to a program.
- *
- * @param sourceFile             The source file this shader was compiled from or <code>null</code> if the shader has no file
- * @param id                     The OpenGL id of the shader
- * @param uniformBindings        The bindings set by the shader
- * @param definitionDependencies The shader pre-definitions this shader is dependent on
- * @param includes               All shader imports included in this file
- * @author Ocelot
- */
-public record CompiledShader(@Nullable ResourceLocation sourceFile,
-                             int id,
-                             Object2IntMap<String> uniformBindings,
-                             Set<String> definitionDependencies,
-                             Set<ResourceLocation> includes) implements NativeResource {
+    public CompiledShader(GpuPipeline pipeline, Set<String> definitionDependencies, Set<Identifier> includes) {
+        this.owner = new Shared(Objects.requireNonNull(pipeline), Set.copyOf(definitionDependencies), Set.copyOf(includes));
+    }
+    private CompiledShader(Shared owner) { this.owner = owner; }
 
-    /**
-     * Applies the additional attributes of this shader to the specified program.
-     */
-    public void apply(ShaderProgram program) {
-        for (Object2IntMap.Entry<String> entry : this.uniformBindings.object2IntEntrySet()) {
-            ShaderUniform uniform = program.getUniform(entry.getKey());
-            if (uniform != null) {
-                uniform.setInt(entry.getIntValue());
-            }
+    /** The cache and callers retain separate handles, so closing a compiler cannot invalidate a live caller. */
+    public CompiledShader retain() {
+        synchronized (this.owner) {
+            this.ensureOpen();
+            this.owner.references = Math.incrementExact(this.owner.references);
+            return new CompiledShader(this.owner);
         }
     }
-
-    @Override
-    public void free() {
-        glDeleteShader(this.id);
+    public RenderPipeline definition() { synchronized (this.owner) { this.ensureOpen(); return this.owner.pipeline.definition(); } }
+    public Set<String> definitionDependencies() { return this.owner.definitionDependencies; }
+    public Set<Identifier> includes() { return this.owner.includes; }
+    public void bind(RenderPass pass) { synchronized (this.owner) { this.ensureOpen(); this.owner.pipeline.bind(pass); } }
+    public boolean isClosed() { synchronized (this.owner) { return this.closed; } }
+    private void ensureOpen() {
+        if (this.closed || this.owner.pipeline.isClosed()) throw new IllegalStateException("Compiled native shader lease is closed");
+    }
+    public void free() { this.close(); }
+    @Override public void close() {
+        synchronized (this.owner) {
+            if (this.closed) return;
+            this.closed = true;
+            if (--this.owner.references == 0) this.owner.pipeline.close();
+        }
+    }
+    private static final class Shared {
+        final GpuPipeline pipeline;
+        final Set<String> definitionDependencies;
+        final Set<Identifier> includes;
+        int references = 1;
+        Shared(GpuPipeline pipeline, Set<String> definitionDependencies, Set<Identifier> includes) {
+            this.pipeline = pipeline; this.definitionDependencies = definitionDependencies; this.includes = includes;
+        }
     }
 }

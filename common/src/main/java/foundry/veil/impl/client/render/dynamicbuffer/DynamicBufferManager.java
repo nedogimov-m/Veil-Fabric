@@ -1,370 +1,181 @@
 package foundry.veil.impl.client.render.dynamicbuffer;
 
-import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.platform.GlStateManager;
-import foundry.veil.Veil;
-import foundry.veil.VeilClient;
-import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.VeilRenderer;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import foundry.veil.api.client.render.dynamicbuffer.DynamicBufferType;
 import foundry.veil.api.client.render.dynamicbuffer.DynamicBuffersChange;
-import foundry.veil.api.client.render.framebuffer.AdvancedFbo;
-import foundry.veil.api.client.render.framebuffer.FramebufferManager;
-import foundry.veil.ext.RenderTargetExtension;
-import foundry.veil.ext.ShaderInstanceExtension;
-import foundry.veil.mixin.dynamicbuffer.accessor.DynamicBufferGameRendererAccessor;
-import it.unimi.dsi.fastutil.objects.Object2IntArrayMap;
-import it.unimi.dsi.fastutil.objects.Object2IntMap;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.ShaderInstance;
-import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
-import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.Nullable;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.NativeResource;
+import foundry.veil.api.client.render.shader.NativePipelineBridge;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.packs.resources.ResourceManager;
 
-import java.nio.IntBuffer;
-import java.util.*;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Consumer;
 
-import static org.lwjgl.opengl.GL11C.*;
-import static org.lwjgl.opengl.GL12C.*;
-import static org.lwjgl.opengl.GL14C.GL_TEXTURE_LOD_BIAS;
-import static org.lwjgl.opengl.GL30C.GL_COLOR_ATTACHMENT1;
+/**
+ * Render-thread owner of requested native world outputs. Buffer requests from independent owners
+ * are combined; changing a request or dimensions replaces storage transactionally. A World lease
+ * freezes the exact mask/storage used by an extracted world and survives subsequent changes.
+ */
+public final class DynamicBufferManager implements AutoCloseable {
+    private final GpuDevice device;
+    private final ResourceManager resources;
+    private final VanillaShaderCompiler compiler;
+    private final Consumer<DynamicBuffersChange> changes;
+    private final Map<Identifier, Integer> requests = new HashMap<>();
+    private final NativeDynamicBufferTarget target;
+    private NativeDynamicOit oitOwner;
+    private NativeDynamicCoverage coverageOwner;
+    private int width, height, activeBuffers;
+    private boolean closed;
 
-@ApiStatus.Internal
-public class DynamicBufferManager implements NativeResource {
-
-    public static final ResourceLocation MAIN_WRAPPER = Veil.veilPath("dynamic_main");
-    private static final DynamicBufferType[] BUFFERS = DynamicBufferType.values();
-    private static final long MAX_SHADER_COMPILE_TIME_NS = 2 * 1_000_000; // millisecond -> nanosecond
-
-    private int activeBuffers;
-    private final Object2IntMap<ResourceLocation> activeBufferLayers;
-    private boolean enabled;
-    private final int[] clearBuffers;
-    private final Map<ResourceLocation, AdvancedFbo> framebuffers;
-    private final List<AdvancedFbo> dynamicFramebuffers;
-    private final EnumMap<DynamicBufferType, DynamicBuffer> dynamicBuffers;
-    private final Set<ShaderInstance> swapShaders;
-    private int dynamicFboPointer;
-
-    public DynamicBufferManager(int width, int height) {
-        this.activeBuffers = 0;
-        this.activeBufferLayers = new Object2IntArrayMap<>();
-        this.enabled = false;
-        this.clearBuffers = Arrays.stream(DynamicBufferType.values()).mapToInt(type -> GL_COLOR_ATTACHMENT1 + type.ordinal()).toArray();
-        this.framebuffers = new HashMap<>();
-        this.dynamicFramebuffers = new ArrayList<>();
-        this.dynamicBuffers = new EnumMap<>(DynamicBufferType.class);
-        this.swapShaders = new HashSet<>();
-
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer textures = stack.mallocInt(DynamicBufferType.values().length);
-            glGenTextures(textures);
-            for (DynamicBufferType value : DynamicBufferType.values()) {
-                DynamicBuffer buffer = new DynamicBuffer(value, textures.get(value.ordinal()));
-                buffer.init(width, height);
-                this.dynamicBuffers.put(value, buffer);
-            }
-        }
+    public DynamicBufferManager(GpuDevice device, ResourceManager resources, int width, int height, VanillaShaderCompiler compiler,
+                                Consumer<DynamicBuffersChange> changes) {
+        this.device = Objects.requireNonNull(device);
+        this.resources = Objects.requireNonNull(resources);
+        this.compiler = Objects.requireNonNull(compiler);
+        this.changes = Objects.requireNonNull(changes);
+        this.target = new NativeDynamicBufferTarget(device, "Veil world dynamic buffers", width, height, 0);
+        this.width = width; this.height = height;
     }
-
-    private void deleteFramebuffers() {
-        FramebufferManager framebufferManager = VeilRenderSystem.renderer().getFramebufferManager();
-        for (Map.Entry<ResourceLocation, AdvancedFbo> entry : this.framebuffers.entrySet()) {
-            entry.getValue().free();
-            framebufferManager.removeFramebuffer(entry.getKey());
-        }
-        this.framebuffers.clear();
-        for (AdvancedFbo fbo : this.dynamicFramebuffers) {
-            fbo.free();
-        }
-        this.dynamicFramebuffers.clear();
-        this.dynamicFboPointer = 0;
-    }
-
-    public int getActiveBuffers(ResourceLocation name) {
-        return this.activeBufferLayers.getOrDefault(name, 0);
-    }
-
-    public int getActiveBuffers() {
-        return this.activeBuffers;
-    }
-
-    public int getBufferTexture(DynamicBufferType buffer) {
-        if ((this.activeBuffers & buffer.getMask()) != 0) {
-            int index = 1 + Integer.bitCount(this.activeBuffers & (buffer.getMask() - 1));
-            int texture = ((RenderTargetExtension) Minecraft.getInstance().getMainRenderTarget()).veil$getTexture(index);
-            if (texture != 0) {
-                return texture;
-            }
-            return this.dynamicBuffers.get(buffer).textureId;
-        }
-        return MissingTextureAtlasSprite.getTexture().getId();
-    }
-
-    public boolean setActiveBuffers(ResourceLocation name, int activeBuffers) {
-        if (Veil.IRIS) {
-            return false;
-        }
-
-        int buffers = this.activeBufferLayers.getOrDefault(name, 0);
-        if (buffers == activeBuffers) {
-            return false;
-        }
-
-        if (activeBuffers == 0) {
-            this.activeBufferLayers.removeInt(name);
-        } else {
-            this.activeBufferLayers.put(name, activeBuffers);
-        }
-
-        int flags = 0;
-        for (int value : this.activeBufferLayers.values()) {
-            flags |= value;
-        }
-        if (flags == this.activeBuffers) {
-            return false;
-        }
-
-        int oldActiveBuffers = this.activeBuffers;
-        this.activeBuffers = flags;
-        this.deleteFramebuffers();
-
-        VeilRenderer renderer = VeilRenderSystem.renderer();
-        this.swapShaders.clear();
-
-        DynamicBufferGameRendererAccessor accessor = (DynamicBufferGameRendererAccessor) Minecraft.getInstance().gameRenderer;
-        for (ShaderInstance shader : accessor.getShaders().values()) {
-            if (((ShaderInstanceExtension) shader).veil$swapBuffers(this.activeBuffers)) {
-                this.swapShaders.add(shader);
-            }
-        }
-        if (!this.swapShaders.isEmpty()) {
-            renderer.getVanillaShaderCompiler().reload(this.swapShaders);
-        }
-
-        try {
-            renderer.getShaderManager().setActiveBuffers(activeBuffers);
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-
-        VeilClient.clientPlatform().onVeilDynamicBuffersChanged(new DynamicBuffersChange(oldActiveBuffers, this.activeBuffers));
+    public int getActiveBuffers(Identifier owner) { this.ensureOpen(); return this.requests.getOrDefault(owner, 0); }
+    GpuDevice device() { return this.device; }
+    public int getActiveBuffers() { this.ensureOpen(); return this.activeBuffers; }
+    /** Returns whether the combined mask changed; individual requests are retained even when redundant. */
+    public boolean setActiveBuffers(Identifier owner, int mask) {
+        this.ensureOpen(); Objects.requireNonNull(owner);
+        int known = (1 << DynamicBufferType.values().length) - 1;
+        if ((mask & ~known) != 0) throw new IllegalArgumentException("Unknown dynamic buffer mask: " + mask);
+        if (this.requests.getOrDefault(owner, 0) == mask) return false;
+        int combined = mask;
+        for (var request : this.requests.entrySet()) if (!request.getKey().equals(owner)) combined |= request.getValue();
+        // Allocation can fail without modifying either the combined mask or its source requests.
+        this.target.configure(this.width, this.height, combined);
+        if (mask == 0) this.requests.remove(owner); else this.requests.put(owner, mask);
+        if (combined == this.activeBuffers) return false;
+        int previous = this.activeBuffers; this.activeBuffers = combined;
+        this.changes.accept(new DynamicBuffersChange(previous, combined));
         return true;
     }
-
-    public boolean isEnabled() {
-        return this.activeBuffers != 0 && this.enabled;
+    /** Borrowed view, valid until the next request/resize. Retain a World for queued GPU work. */
+    public GpuTextureView getBufferTexture(DynamicBufferType type) {
+        this.ensureOpen();
+        World scoped = NativeDynamicBuffers.scopedWorld(this);
+        if (scoped != null) return scoped.texture(type);
+        try (var snapshot = this.target.retain()) { return snapshot.texture(type); }
     }
-
-    public void setEnabled(boolean enabled) {
-        if (!Veil.IRIS) {
-            this.enabled = enabled;
-        }
+    /** Mask of the selected world, including when post-processing temporarily suspends capture. */
+    public int getAvailableBuffers() {
+        this.ensureOpen(); World scoped = NativeDynamicBuffers.scopedWorld(this);
+        return scoped == null ? this.activeBuffers : scoped.mask();
     }
-
-    @Override
-    public void free() {
-        this.deleteFramebuffers();
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer textures = stack.mallocInt(this.dynamicBuffers.size());
-            for (DynamicBuffer buffer : this.dynamicBuffers.values()) {
-                textures.put(buffer.textureId);
-            }
-            textures.rewind();
-            glDeleteTextures(textures);
-        }
-        this.dynamicBuffers.clear();
-    }
-
-    /**
-     * Sets up the rendering state for the specified target.
-     *
-     * @param name         The name of the framebuffer
-     * @param renderTarget The render target to wrap or <code>null</code> to free
-     * @param setViewport  Whether the viewport should also be set
-     */
-    public void setupRenderState(ResourceLocation name, @Nullable RenderTarget renderTarget, boolean setViewport) {
-        if (!this.isEnabled()) {
-            return;
-        }
-
-        if (renderTarget == null) {
-            VeilRenderSystem.renderer().getFramebufferManager().removeFramebuffer(name);
-            AdvancedFbo fbo = this.framebuffers.remove(name);
-            if (fbo != null) {
-                fbo.free();
-            }
-            // If the buffer doesn't exist, then try to bind the main framebuffer
-            this.setupRenderState(MAIN_WRAPPER, Objects.requireNonNull(Minecraft.getInstance().getMainRenderTarget()), setViewport);
-            return;
-        }
-
-        AdvancedFbo fbo = this.framebuffers.get(name);
-        if (fbo == null) {
-            AdvancedFbo.Builder builder = AdvancedFbo.withSize(renderTarget.width, renderTarget.height);
-            builder.addColorTextureWrapper(renderTarget.getColorTextureId());
-            for (Map.Entry<DynamicBufferType, DynamicBuffer> entry : this.dynamicBuffers.entrySet()) {
-                DynamicBufferType type = entry.getKey();
-                if ((this.activeBuffers & type.getMask()) != 0) {
-                    builder.setName(type.getSourceName()).addColorTextureWrapper(entry.getValue().textureId);
-                }
-            }
-            builder.setDepthTextureWrapper(renderTarget.getDepthTextureId());
-            builder.setDebugLabel(name.toString());
-            fbo = builder.build(true);
-            this.framebuffers.put(name, fbo);
-        }
-
-        VeilRenderSystem.renderer().getFramebufferManager().setFramebuffer(name, fbo);
-        fbo.bind(setViewport);
-    }
-
-    /**
-     * Creates a dynamic fbo from the specified framebuffer. It will only write into the first color texture buffer and optionally the depth texture.
-     *
-     * @param framebuffer The framebuffer to add dynamic buffers to
-     * @return The created buffer or <code>null</code> to use the input value
-     */
-    public AdvancedFbo getDynamicFbo(AdvancedFbo framebuffer) {
-        if (!this.isEnabled()) {
-            return framebuffer;
-        }
-
-        if (!framebuffer.isColorTextureAttachment(0)) {
-            return framebuffer;
-        }
-
-        int colorTexture = framebuffer.getColorTextureAttachment(0).getId();
-
-        if (this.dynamicFboPointer < this.dynamicFramebuffers.size()) {
-            AdvancedFbo fbo = this.dynamicFramebuffers.get(this.dynamicFboPointer);
-            if (fbo.getWidth() == framebuffer.getWidth() && fbo.getHeight() == framebuffer.getHeight()) {
-                this.dynamicFboPointer++;
-                fbo.setColorAttachmentTexture(0, colorTexture);
-                if (framebuffer.isDepthTextureAttachment()) {
-                    fbo.setDepthAttachmentTexture(framebuffer.getDepthTextureAttachment().getId());
-                }
-                fbo.clear(GL_COLOR_BUFFER_BIT, this.clearBuffers);
-                return fbo;
-            }
-            this.dynamicFramebuffers.remove(this.dynamicFboPointer);
-            fbo.free();
-        }
-
-        AdvancedFbo.Builder builder = AdvancedFbo.withSize(framebuffer.getWidth(), framebuffer.getHeight());
-        builder.addColorTextureWrapper(colorTexture);
-        for (Map.Entry<DynamicBufferType, DynamicBuffer> entry : this.dynamicBuffers.entrySet()) {
-            DynamicBufferType type = entry.getKey();
-            if ((this.activeBuffers & type.getMask()) != 0) {
-//                if (createTextures) {
-                builder.setName(type.getSourceName())
-                        .setFormat(type.getTexelFormat(), type.getInternalFormat())
-                        .addColorTextureBuffer();
-//                } else {
-//                    builder.setName(type.getSourceName())
-//                            .addColorTextureWrapper(entry.getValue().textureId);
-//                }
-            }
-        }
-        if (framebuffer.isDepthTextureAttachment()) {
-            builder.setDepthTextureWrapper(framebuffer.getDepthTextureAttachment().getId());
-        } else {
-            builder.setDepthTextureBuffer();
-        }
-        builder.setDebugLabel(framebuffer.getDebugLabel());
-        AdvancedFbo fbo = builder.build(true);
-
-        this.dynamicFramebuffers.add(this.dynamicFboPointer, fbo);
-        this.dynamicFboPointer++;
-
-        return fbo;
-    }
-
-    /**
-     * @return The color buffers used for dynamic buffers for clearing
-     */
-    public int[] getClearBuffers() {
-        return this.clearBuffers;
-    }
-
-    public void endFrame() {
-        for (AdvancedFbo framebuffer : this.framebuffers.values()) {
-            framebuffer.clear(0.0F, 0.0F, 0.0F, 0.0F, GL_COLOR_BUFFER_BIT, this.clearBuffers);
-        }
-        ListIterator<AdvancedFbo> iterator = this.dynamicFramebuffers.listIterator(this.dynamicFboPointer);
-        while (iterator.hasNext()) {
-            iterator.next().free();
-            iterator.remove();
-        }
-        this.dynamicFboPointer = 0;
-
-        if (this.swapShaders.isEmpty()) {
-            return;
-        }
-
-        // When switching dynamic buffers all vanilla shader sources have to be uploaded before swapping, otherwise
-        // the shader source will be processed multiple times
-        // However, this causes a noticeable lag spike when switching dynamic buffers
-        // This allocates a couple milliseconds to shader compilation on other frames
-
-        long startTime = System.nanoTime();
-        Iterator<ShaderInstance> shaderIterator = this.swapShaders.iterator();
-        while (shaderIterator.hasNext() && System.nanoTime() - startTime < MAX_SHADER_COMPILE_TIME_NS) {
-            ShaderInstanceExtension shader = (ShaderInstanceExtension) shaderIterator.next();
-            if (!shader.veil$isRecompileReady(this.activeBuffers)) {
-                continue;
-            }
-
-            boolean success = shader.veil$applyCompile();
-            shaderIterator.remove();
-
-            // If no real work was done, then try the next shader
-            if (success) {
-                break;
-            }
-        }
-
-        if (!shaderIterator.hasNext()) {
-            Veil.LOGGER.info("Finished uploading vanilla shaders");
-        }
-    }
-
-    public void markRecompiled(ShaderInstance shaderInstance) {
-        this.swapShaders.add(shaderInstance);
-    }
-
     public void resizeFramebuffers(int width, int height) {
-        this.deleteFramebuffers();
-        for (DynamicBuffer buffer : this.dynamicBuffers.values()) {
-            buffer.resize(width, height);
+        this.ensureOpen(); this.target.configure(width, height, this.activeBuffers);
+        this.width = width; this.height = height;
+    }
+    /** Prepare before any world pass opens; the returned selection must outlive its encoder submissions. */
+    public World beginWorld(GpuTextureView color, GpuTextureView depth) {
+        return this.beginWorld(color, depth, false);
+    }
+    World beginWorld(GpuTextureView color, GpuTextureView depth, boolean independent) {
+        this.ensureOpen(); Objects.requireNonNull(color);
+        NativeDynamicBufferTarget.Snapshot snapshot;
+        if (independent) {
+            try (var isolated = new NativeDynamicBufferTarget(this.device, "Veil independent world dynamic buffers",
+                    color.getWidth(0), color.getHeight(0), this.activeBuffers)) { snapshot = isolated.retain(); }
+        } else {
+            this.resizeFramebuffers(color.getWidth(0), color.getHeight(0)); snapshot = this.target.retain();
         }
+        return new World(snapshot, color, depth);
+    }
+    public void endFrame() { this.ensureOpen(); this.compiler.removeRetiredBases(); }
+    private NativeDynamicOit.Frame retainOit(int width, int height, int mask) {
+        this.ensureOpen();
+        if (this.oitOwner == null) this.oitOwner = new NativeDynamicOit(this.device, this.resources, width, height, mask);
+        else this.oitOwner.configure(width, height, mask);
+        return this.oitOwner.retain();
+    }
+    private NativeDynamicCoverage.Frame retainCoverage(int width, int height, int mask) {
+        this.ensureOpen();
+        if (this.coverageOwner == null) this.coverageOwner = new NativeDynamicCoverage(this.device, this.resources, width, height, mask);
+        else this.coverageOwner.configure(width, height, mask);
+        return this.coverageOwner.retain();
+    }
+    private void ensureOpen() { if (this.closed) throw new IllegalStateException("Dynamic buffer manager is closed"); }
+    @Override public void close() {
+        if (this.closed) return;
+        this.closed = true; this.requests.clear(); this.target.close();
+        if (this.oitOwner != null) this.oitOwner.close();
+        if (this.coverageOwner != null) this.coverageOwner.close();
     }
 
-    private record DynamicBuffer(DynamicBufferType type, int textureId) {
-
-        public void init(int width, int height) {
-            GlStateManager._bindTexture(this.textureId);
-            GlStateManager._texParameter(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            GlStateManager._texParameter(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-            GlStateManager._texParameter(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-            GlStateManager._texParameter(GL_TEXTURE_2D, GL_TEXTURE_MIN_LOD, 0);
-            GlStateManager._texParameter(GL_TEXTURE_2D, GL_TEXTURE_MAX_LOD, 0);
-            GlStateManager._texParameter(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, 0.0F);
-            GlStateManager._texParameter(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            GlStateManager._texParameter(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-            GlStateManager._texImage2D(GL_TEXTURE_2D, 0, this.type.getInternalFormat(), width, height, 0, this.type.getTexelFormat(), GL_UNSIGNED_INT, null);
+    /** Immutable world selection. Retain independently for each encoder using the appended attachments. */
+    public final class World implements AutoCloseable {
+        private final NativeDynamicBufferTarget.Snapshot snapshot;
+        private final GpuTextureView color, depth;
+        private NativeDynamicOit.Frame oit;
+        private NativeDynamicCoverage.Frame coverage;
+        private int references = 1;
+        private World(NativeDynamicBufferTarget.Snapshot snapshot, GpuTextureView color, GpuTextureView depth) {
+            this.snapshot = snapshot; this.color = color; this.depth = depth;
         }
-
-        public void resize(int width, int height) {
-            GlStateManager._bindTexture(this.textureId);
-            GlStateManager._texImage2D(GL_TEXTURE_2D, 0, this.type.getInternalFormat(), width, height, 0, this.type.getTexelFormat(), GL_UNSIGNED_INT, null);
+        public int mask() { this.ensureLive(); return this.snapshot.mask(); }
+        DynamicBufferManager owner() { return DynamicBufferManager.this; }
+        public GpuTextureView texture(DynamicBufferType type) { this.ensureLive(); return this.snapshot.texture(type); }
+        public void clear(CommandEncoder encoder) { this.ensureLive(); this.snapshot.clear(encoder); }
+        public World retain() { this.ensureLive(); this.references++; return this; }
+        public boolean matches(RenderPassDescriptor descriptor) {
+            this.ensureLive();
+            return this.mask() != 0 && descriptor.colorAttachments().size() == 1
+                    && descriptor.colorAttachments().getFirst() != null
+                    && descriptor.colorAttachments().getFirst().textureView().texture() == this.color.texture()
+                    && (descriptor.depthAttachment() == null || this.depth != null
+                        && descriptor.depthAttachment().textureView().texture() == this.depth.texture());
+        }
+        public RenderPassDescriptor extend(RenderPassDescriptor descriptor) { this.ensureLive(); return this.snapshot.extend(descriptor); }
+        RenderPassDescriptor extendCoverage(CommandEncoder encoder, RenderPassDescriptor descriptor) {
+            this.ensureLive();
+            if (this.coverage == null) this.coverage = DynamicBufferManager.this.retainCoverage(this.color.getWidth(0), this.color.getHeight(0), this.mask());
+            this.coverage.initialize(encoder, this.snapshot::texture, this.color, descriptor.colorAttachments().getFirst().clearValue());
+            return this.coverage.extend(descriptor);
+        }
+        void resolveCoverage(CommandEncoder encoder) { this.ensureLive(); this.coverage.resolve(encoder, this.snapshot::texture); }
+        RenderPassDescriptor extendOit(CommandEncoder encoder, RenderPassDescriptor descriptor) {
+            this.ensureLive();
+            if (this.oit == null) {
+                this.oit = DynamicBufferManager.this.retainOit(this.color.getWidth(0), this.color.getHeight(0), this.mask());
+                this.oit.clear(encoder);
+            }
+            return this.oit.extend(descriptor);
+        }
+        public VanillaShaderCompiler.Lease pipeline(CompiledRenderPipeline base) {
+            return this.pipeline(base, false);
+        }
+        VanillaShaderCompiler.Lease pipeline(CompiledRenderPipeline base, boolean accumulation) {
+            this.ensureLive();
+            RenderPipeline definition = NativePipelineBridge.actualDefinition(base)
+                    .or(() -> NativePipelineBridge.originalDefinition(base))
+                    .orElseThrow(() -> new IllegalArgumentException("World pipeline has no native source metadata: " + base));
+            RenderPipeline variant = accumulation ? Objects.requireNonNull(this.oit).pipeline(definition)
+                    : this.coverage == null ? this.snapshot.pipeline(definition) : this.coverage.pipeline(definition);
+            return DynamicBufferManager.this.compiler.retain(base, variant, this.mask());
+        }
+        boolean hasOit() { return this.oit != null; }
+        void composeOit(CommandEncoder encoder, GpuTextureView nativeAccumulation, GpuTextureView depthBounds, GpuTextureView[] coefficients) {
+            this.ensureLive(); this.oit.compose(encoder, this.snapshot::texture, nativeAccumulation, depthBounds, coefficients);
+        }
+        private void ensureLive() { if (this.references == 0) throw new IllegalStateException("Dynamic world selection is closed"); }
+        @Override public void close() {
+            this.ensureLive();
+            if (--this.references == 0) {
+                try { if (this.oit != null) this.oit.close(); }
+                finally { try { if (this.coverage != null) this.coverage.close(); } finally { this.snapshot.close(); } }
+            }
         }
     }
 }

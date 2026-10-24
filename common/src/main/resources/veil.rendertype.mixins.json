@@ -2,18 +2,16 @@
   "required": true,
   "minVersion": "0.8",
   "package": "foundry.veil.mixin.rendertype",
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_25",
   "plugin": "foundry.veil.VeilMixinPluginImpl",
   "client": [
-    "accessor.RenderStateShardAccessor",
     "accessor.RenderTypeAccessor",
-    "accessor.RenderTypeBufferSourceAccessor",
-    "client.CompositeStateBuilderMixin",
-    "client.CompositeStateMixin",
-    "client.RenderTypeMixin"
+    "client.RenderTypeMixin",
+    "accessor.RenderSetupAccessor",
+    "accessor.TextureBindingAccessor",
+    "client.PreparedRenderTypeMixin"
   ],
   "injectors": {
     "defaultRequire": 1
   }
 }
-  

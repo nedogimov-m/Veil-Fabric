@@ -7,11 +7,11 @@ import foundry.veil.api.client.render.MatrixStack;
 import foundry.veil.api.quasar.data.ParticleEmitterData;
 import foundry.veil.api.quasar.data.QuasarParticles;
 import foundry.veil.impl.TickTaskSchedulerImpl;
-import net.minecraft.client.Camera;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.resources.ResourceLocation;
+import foundry.veil.api.client.render.VertexSource;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import org.jetbrains.annotations.ApiStatus;
@@ -28,7 +28,7 @@ public class ParticleSystemManager {
     private static final double REMOVAL_DISTANCE_SQ = 128.0 * 128.0;
 
     private final List<ParticleEmitter> particleEmitters;
-    private final Set<ResourceLocation> invalidEmitters;
+    private final Set<Identifier> invalidEmitters;
     private final AtomicInteger particleCount;
 
     private ClientLevel level;
@@ -54,11 +54,11 @@ public class ParticleSystemManager {
         this.scheduler = new TickTaskSchedulerImpl();
     }
 
-    public @Nullable ParticleEmitter createEmitter(ResourceLocation name) {
+    public @Nullable ParticleEmitter createEmitter(Identifier name) {
         if (this.level == null) {
             return null;
         }
-        ParticleEmitterData data = QuasarParticles.registryAccess().registry(QuasarParticles.EMITTER).map(registry -> registry.get(name)).orElse(null);
+        ParticleEmitterData data = QuasarParticles.registryAccess().lookup(QuasarParticles.EMITTER).map(registry -> registry.getValue(name)).orElse(null);
         if (data == null) {
             if (this.invalidEmitters.add(name)) {
                 Veil.LOGGER.error("Unknown Quasar Particle Emitter: {}", name);
@@ -104,10 +104,10 @@ public class ParticleSystemManager {
     }
 
     @ApiStatus.Internal
-    public void render(MatrixStack matrixStack, MultiBufferSource bufferSource, Camera camera, CullFrustum frustum, float partialTicks) {
+    public void render(MatrixStack matrixStack, VertexSource bufferSource, CameraRenderState camera, CullFrustum frustum, float partialTicks) {
         // TODO store emitters per-chunk and fetch them from the renderer
 
-        this.particleEmitters.sort(Comparator.comparingDouble(a -> -a.getPosition().distanceSquared(camera.getPosition().x, camera.getPosition().y, camera.getPosition().z)));
+        this.particleEmitters.sort(Comparator.comparingDouble(a -> -a.getPosition().distanceSquared(camera.pos.x, camera.pos.y, camera.pos.z)));
         for (ParticleEmitter emitter : this.particleEmitters) {
             emitter.render(matrixStack, bufferSource, camera, partialTicks);
         }
@@ -125,7 +125,7 @@ public class ParticleSystemManager {
         }
 
         particles -= freeSpace;
-        Entity cameraEntity = Minecraft.getInstance().cameraEntity;
+        Entity cameraEntity = Minecraft.getInstance().getCameraEntity();
         for (ParticleEmitter emitter : this.particleEmitters) {
             Vector3d pos = emitter.getPosition();
             double scaleFactor = Math.min(cameraEntity != null ? (cameraEntity.distanceToSqr(pos.x, pos.y, pos.z) - PERSISTENT_DISTANCE_SQ) / REMOVAL_DISTANCE_SQ : 1.0, 1.0);

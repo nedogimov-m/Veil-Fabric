@@ -2,7 +2,7 @@ package foundry.veil.platform.registry;
 
 import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.util.Collection;
 import java.util.ServiceLoader;
@@ -63,7 +63,7 @@ public interface RegistrationProvider<T> {
      * on the wrapper might result in crashes!</strong>
      */
     default <I extends T> RegistryObject<I> register(String name, Supplier<? extends I> supplier) {
-        return this.register(ResourceLocation.fromNamespaceAndPath(this.getModId(), name), supplier);
+        return this.register(Identifier.fromNamespaceAndPath(this.getModId(), name), supplier);
     }
 
     /**
@@ -75,7 +75,7 @@ public interface RegistrationProvider<T> {
      * @return a wrapper containing the lazy registered object. <strong>Calling {@link RegistryObject#get() get} too early
      * on the wrapper might result in crashes!</strong>
      */
-    <I extends T> RegistryObject<I> register(ResourceLocation id, Supplier<? extends I> supplier);
+    <I extends T> RegistryObject<I> register(Identifier id, Supplier<? extends I> supplier);
 
     /**
      * @return An <strong>immutable</strong> view of all the objects currently registered

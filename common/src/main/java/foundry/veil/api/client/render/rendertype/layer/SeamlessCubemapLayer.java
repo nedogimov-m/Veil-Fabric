@@ -3,7 +3,6 @@ package foundry.veil.api.client.render.rendertype.layer;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import foundry.veil.api.client.registry.RenderTypeLayerRegistry;
-import foundry.veil.api.client.render.VeilRenderBridge;
 import foundry.veil.api.client.render.rendertype.VeilRenderTypeBuilder;
 
 /**
@@ -19,9 +18,7 @@ public record SeamlessCubemapLayer(boolean enabled) implements RenderTypeLayer {
 
     @Override
     public void addShard(VeilRenderTypeBuilder builder, Object... params) {
-        if (this.enabled) {
-            builder.addLayer(VeilRenderBridge.seamlessCubeMapState());
-        }
+        builder.seamlessCubemapState(this.enabled);
     }
 
     @Override

@@ -3,10 +3,6 @@
   "fragment": "veil:light/directional",
   "textures": {
     "AlbedoSampler": "veil:dynamic_buffer/albedo",
-    "NormalSampler": "veil:dynamic_buffer/normal",
-    "DepthSampler": {
-      "type": "framebuffer",
-      "name": "minecraft:main:depth"
-    }
+    "NormalSampler": "veil:dynamic_buffer/normal"
   }
 }

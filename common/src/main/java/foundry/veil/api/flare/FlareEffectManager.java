@@ -7,7 +7,7 @@ import foundry.veil.api.flare.model.BakedShell;
 import foundry.veil.api.flare.modifier.ControllerManager;
 import foundry.veil.impl.flare.FlareManager;
 import foundry.veil.impl.flare.ShellManager;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -28,12 +28,12 @@ public final class FlareEffectManager {
         return VeilRenderSystem.renderer().getEffectManager();
     }
 
-    public static FlareEffectTemplate getTemplate(ResourceLocation resourceLocation) {
-        return FlareManager.registryAccess().registry(FlareManager.EFFECT_TEMPLATES).orElseThrow().get(resourceLocation);
+    public static FlareEffectTemplate getTemplate(Identifier resourceLocation) {
+        return FlareManager.registryAccess().lookup(FlareManager.EFFECT_TEMPLATES).orElseThrow().getValue(resourceLocation);
     }
 
-    public static FlareModule getModule(ResourceLocation resourceLocation) {
-        return FlareManager.registryAccess().registry(FlareManager.EFFECT_MODULES).orElseThrow().get(resourceLocation);
+    public static FlareModule getModule(Identifier resourceLocation) {
+        return FlareManager.registryAccess().lookup(FlareManager.EFFECT_MODULES).orElseThrow().getValue(resourceLocation);
     }
 
     @ApiStatus.Internal
@@ -41,7 +41,7 @@ public final class FlareEffectManager {
         return this.shellManager;
     }
 
-    public BakedShell getBakedShell(ResourceLocation modelLocation) {
+    public BakedShell getBakedShell(Identifier modelLocation) {
         return this.shellManager.getBakedShell(modelLocation);
     }
 

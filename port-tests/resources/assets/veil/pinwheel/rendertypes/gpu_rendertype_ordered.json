@@ -1,0 +1,8 @@
+{
+  "format": "POSITION", "mode": "TRIANGLES", "bufferSize": "SMALL",
+  "affectsCrumbling": true, "sort": false, "standardUniforms": false,
+  "layers": [
+    [{"type":"veil:shader","name":"veil:gpu_rendertype_red"},{"type":"minecraft:cull","face":"none"},{"type":"minecraft:depth_test","mode":"always"},{"type":"minecraft:write_mask","color":true,"depth":false},{"type":"minecraft:output","framebuffer":"veil:gpu_rendertype_target"}],
+    [{"type":"veil:shader","name":"veil:gpu_rendertype_blue"},{"type":"minecraft:cull","face":"none"},{"type":"minecraft:depth_test","mode":"always"},{"type":"minecraft:write_mask","color":true,"depth":false},{"type":"minecraft:transparency","mode":"translucent"},{"type":"minecraft:output","framebuffer":"veil:gpu_rendertype_target"}]
+  ]
+}

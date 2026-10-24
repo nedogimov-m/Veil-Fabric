@@ -1,4 +1,4 @@
-uniform sampler3D BlockGrid;
+uniform sampler2D BlockGrid;
 uniform vec3 GridOrigin;
 
 #define VOXELSHADOW_GRID_SIZE 64
@@ -26,7 +26,7 @@ float voxelshadowVisibility(vec3 fragPos, vec3 lightPos) {
 
     for (int i = 0; i < VOXELSHADOW_MAX_STEPS; i++) {
         if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, ivec3(VOXELSHADOW_GRID_SIZE)))) break;
-        if (i > 0 && texelFetch(BlockGrid, cell, 0).r > 0.5) return 0.0;
+        if (i > 0 && texelFetch(BlockGrid, ivec2((cell.x + cell.y * 64 + cell.z * 4096) & 511, (cell.x + cell.y * 64 + cell.z * 4096) >> 9), 0).r > 0.5) return 0.0;
 
         if (tMax.x < tMax.y && tMax.x < tMax.z) {
             if (tMax.x >= rayLen) break;

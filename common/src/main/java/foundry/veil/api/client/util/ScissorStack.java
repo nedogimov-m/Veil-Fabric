@@ -1,138 +1,61 @@
 package foundry.veil.api.client.util;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import net.minecraft.client.Minecraft;
+import com.mojang.renderpearl.api.commands.RenderPass;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
-import net.minecraft.util.Mth;
 import org.jetbrains.annotations.Nullable;
-
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Objects;
 
-/**
- * A utility class to manage scissor clipping regions.
- * This allows for restricting rendering to specific rectangular areas.
- *
- * @author amo, Ocelot
- */
-public final class ScissorStack {
+/** Owns top-left native pass scissors; input positions are GUI coordinates, stored bounds are framebuffer pixels. */
+public final class ScissorStack implements AutoCloseable {
+    private final Deque<ScreenRectangle> regions = new ArrayDeque<>();
+    private final float guiScale;
+    private final int width;
+    private final int height;
+    private final @Nullable RenderPass pass;
 
-    private final Deque<ScreenRectangle> regions;
-
-    public ScissorStack() {
-        this.regions = new ArrayDeque<>();
+    public ScissorStack(float guiScale, int framebufferWidth, int framebufferHeight) {
+        this(null, guiScale, framebufferWidth, framebufferHeight);
     }
-
-    private void apply(ScreenRectangle rectangle) {
-        RenderSystem.enableScissor(
-                rectangle.left(),
-                Minecraft.getInstance().getWindow().getHeight() - rectangle.bottom(),
-                rectangle.width(),
-                rectangle.height());
+    public ScissorStack(@Nullable RenderPass pass, float guiScale, int framebufferWidth, int framebufferHeight) {
+        if (!Float.isFinite(guiScale) || guiScale <= 0 || framebufferWidth <= 0 || framebufferHeight <= 0)
+            throw new IllegalArgumentException("Positive native GUI scale and framebuffer dimensions required");
+        this.pass = pass; this.guiScale = guiScale; this.width = framebufferWidth; this.height = framebufferHeight;
     }
-
-    /**
-     * Pushes a new scissor clipping region onto the stack.
-     * The region is automatically constrained by any existing regions on the stack.
-     *
-     * @param x      The x-coordinate of the top-left corner
-     * @param y      The y-coordinate of the top-left corner
-     * @param width  The width of the region
-     * @param height The height of the region
-     */
-    public void push(int x, int y, int width, int height) {
-        this.push((float) x, (float) y, (float) width, (float) height);
+    public void push(int x, int y, int width, int height) { push((float) x, y, width, height); }
+    public void push(float x, float y, float regionWidth, float regionHeight) {
+        if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(regionWidth) || !Float.isFinite(regionHeight) || regionWidth < 0 || regionHeight < 0)
+            throw new IllegalArgumentException("Finite scissor coordinates and nonnegative dimensions required");
+        int left = clamp((int) Math.floor((double) x * guiScale), width);
+        int top = clamp((int) Math.floor((double) y * guiScale), height);
+        int right = clamp((int) Math.ceil(((double) x + regionWidth) * guiScale), width);
+        int bottom = clamp((int) Math.ceil(((double) y + regionHeight) * guiScale), height);
+        ScreenRectangle parent = regions.peek();
+        if (parent != null) { left = Math.max(left, parent.left()); top = Math.max(top, parent.top()); right = Math.min(right, parent.right()); bottom = Math.min(bottom, parent.bottom()); }
+        regions.push(new ScreenRectangle(left, top, Math.max(0, right - left), Math.max(0, bottom - top)));
+        applyOwned();
     }
-
-    /**
-     * Pushes a new scissor clipping region onto the stack.
-     * The region is automatically constrained by any existing regions on the stack.
-     *
-     * @param x      The x-coordinate of the top-left corner
-     * @param y      The y-coordinate of the top-left corner
-     * @param width  The width of the region
-     * @param height The height of the region
-     * @since 1.3.0
-     */
-    public void push(float x, float y, float width, float height) {
-        if (!this.regions.isEmpty()) {
-            float scale = (float) Minecraft.getInstance().getWindow().getGuiScale();
-            float x2 = x + width;
-            float y2 = y + height;
-
-            ScreenRectangle parent = this.regions.peek();
-            x = Mth.clamp(x * scale, parent.left(), parent.right());
-            width = Mth.clamp(x2 * scale, parent.left(), parent.right()) - x;
-            y = Mth.clamp(y * scale, parent.top(), parent.bottom());
-            height = Mth.clamp(y2 * scale, parent.top(), parent.bottom()) - y;
+    private static int clamp(int value, int limit) { return Math.clamp(value, 0, limit); }
+    /** Returns false for an empty intersection; native frontend passes require a positive scissor. */
+    public boolean apply(RenderPass target) {
+        Objects.requireNonNull(target); ScreenRectangle region = regions.peek();
+        if (region == null) target.disableScissor();
+        else {
+            if (region.width() == 0 || region.height() == 0) return false;
+            target.enableScissor(region.left(), region.top(), region.width(), region.height());
         }
-
-        ScreenRectangle region = new ScreenRectangle((int) x, (int) y, (int) width, (int) height);
-        this.regions.push(region);
-        this.apply(region);
+        return true;
     }
-
-    /**
-     * Removes the top scissor clipping region from the stack.
-     * If there are any regions remaining, the previous region is reapplied.
-     */
-    public void pop() {
-        this.regions.pop();
-        if (this.regions.isEmpty()) {
-            RenderSystem.disableScissor();
-        } else {
-            this.apply(this.regions.peek());
-        }
-    }
-
-    /**
-     * @return The top of the scissor stack or <code>null</code> if scissoring is disabled
-     * @since 1.3.0
-     */
-    public @Nullable ScreenRectangle getTop() {
-        return this.regions.isEmpty() ? null : this.regions.peek();
-    }
-
-    /**
-     * Checks if the current scissor region contains the x, y point.
-     *
-     * @param x The x position to check
-     * @param y The y position to check
-     * @return Whether that position is contained in the scissor bounds
-     * @since 1.3.0
-     */
-    public boolean containsPoint(float x, float y) {
-        if (this.regions.isEmpty()) {
-            return true;
-        }
-
-        float scale = (float) Minecraft.getInstance().getWindow().getGuiScale();
-        return this.regions.peek().containsPoint((int) (x * scale), (int) (y * scale));
-    }
-
-    /**
-     * @return The number of regions in the stack
-     * @since 1.3.0
-     */
-    public int size() {
-        return this.regions.size();
-    }
-
-    /**
-     * @return Whether all regions have been popped
-     * @since 1.3.0
-     */
-    public boolean isEmpty() {
-        return this.regions.isEmpty();
-    }
-
-    /**
-     * Clears all scissored regions and disables scissoring.
-     *
-     * @since 1.3.0
-     */
-    public void clear() {
-        this.regions.clear();
-        RenderSystem.disableScissor();
-    }
+    public boolean isVisible() { ScreenRectangle region = regions.peek(); return region == null || region.width() > 0 && region.height() > 0; }
+    /** All draws owned by this stack use this guard, including empty intersections which cannot be set on a native pass. */
+    public void draw(Runnable commands) { Objects.requireNonNull(commands); if (isVisible()) commands.run(); }
+    private void applyOwned() { if (pass != null) apply(pass); }
+    public void pop() { regions.pop(); applyOwned(); }
+    public @Nullable ScreenRectangle getTop() { return regions.peek(); }
+    public boolean containsPoint(float x, float y) { return regions.isEmpty() || regions.peek().containsPoint((int) Math.floor(x * guiScale), (int) Math.floor(y * guiScale)); }
+    public int size() { return regions.size(); }
+    public boolean isEmpty() { return regions.isEmpty(); }
+    public void clear() { regions.clear(); applyOwned(); }
+    @Override public void close() { clear(); }
 }

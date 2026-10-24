@@ -11,7 +11,6 @@ import foundry.veil.api.quasar.data.module.force.*;
 import foundry.veil.api.quasar.data.module.init.*;
 import foundry.veil.api.quasar.data.module.render.ColorParticleModuleData;
 import foundry.veil.api.quasar.data.module.render.TrailParticleModuleData;
-import foundry.veil.api.quasar.data.module.update.TickRotationParticleModuleData;
 import foundry.veil.api.quasar.data.module.update.TickSizeParticleModuleData;
 import foundry.veil.api.quasar.data.module.update.TickSubEmitterModuleData;
 import foundry.veil.api.quasar.emitters.module.init.InitRandomRotationModuleData;
@@ -23,7 +22,7 @@ import foundry.veil.platform.registry.RegistrationProvider;
 import gg.moonflower.molangcompiler.api.MolangExpression;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 import org.joml.Vector3d;
 import org.joml.Vector3f;
@@ -102,7 +101,7 @@ public class ParticleModuleTypeRegistry {
 
     // INIT
     public static final ModuleType<InitialVelocityModuleData> INITIAL_VELOCITY = registerModule("initial_velocity", InitialVelocityModuleData.CODEC, () -> new InitialVelocityModuleData(new Vector3d(0, 1, 0), false, 1.0F));
-    public static final ModuleType<InitSubEmitterModuleData> INIT_SUB_EMITTER = registerModule("init_sub_emitter", InitSubEmitterModuleData.CODEC, () -> new InitSubEmitterModuleData(ResourceLocation.withDefaultNamespace("")));
+    public static final ModuleType<InitSubEmitterModuleData> INIT_SUB_EMITTER = registerModule("init_sub_emitter", InitSubEmitterModuleData.CODEC, () -> new InitSubEmitterModuleData(Identifier.withDefaultNamespace("")));
     /**
      * @deprecated Use {@link ParticleSettings#randomSize()} instead
      */
@@ -138,14 +137,10 @@ public class ParticleModuleTypeRegistry {
 
     // UPDATE
     public static final ModuleType<TickSizeParticleModuleData> TICK_SIZE = registerModule("size", TickSizeParticleModuleData.CODEC, () -> new TickSizeParticleModuleData(MolangExpression.of(1)));
-    /**
-     * @since 4.5.0
-     */
-    public static final ModuleType<TickRotationParticleModuleData> TICK_ROTATION = registerModule("rotation", TickRotationParticleModuleData.CODEC, () -> new TickRotationParticleModuleData(MolangExpression.ZERO, MolangExpression.ZERO, MolangExpression.ZERO));
-    public static final ModuleType<TickSubEmitterModuleData> TICK_SUB_EMITTER = registerModule("tick_sub_emitter", TickSubEmitterModuleData.CODEC, () -> new TickSubEmitterModuleData(ResourceLocation.withDefaultNamespace(""), 5));
+    public static final ModuleType<TickSubEmitterModuleData> TICK_SUB_EMITTER = registerModule("tick_sub_emitter", TickSubEmitterModuleData.CODEC, () -> new TickSubEmitterModuleData(Identifier.withDefaultNamespace(""), 5));
     // UPDATE - COLLISION
     public static final ModuleType<DieOnCollisionModuleData> DIE_ON_COLLISION = registerModule("die_on_collision", DieOnCollisionModuleData.CODEC, DieOnCollisionModuleData::new);
-    public static final ModuleType<CollisionSubEmitterData> SUB_EMITTER_COLLISION = registerModule("sub_emitter_collision", CollisionSubEmitterData.CODEC, () -> new CollisionSubEmitterData(ResourceLocation.withDefaultNamespace("")));
+    public static final ModuleType<CollisionSubEmitterData> SUB_EMITTER_COLLISION = registerModule("sub_emitter_collision", CollisionSubEmitterData.CODEC, () -> new CollisionSubEmitterData(Identifier.withDefaultNamespace("")));
     //    ModuleType<BounceParticleModule> BOUNCE = registerUpdateModule("bounce", BounceParticleModule.CODEC);
     // UPDATE - FORCES
     public static final ModuleType<GravityForceData> GRAVITY = registerModule("gravity", GravityForceData.CODEC, () -> new GravityForceData(1F));

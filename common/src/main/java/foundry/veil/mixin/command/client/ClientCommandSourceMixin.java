@@ -3,7 +3,7 @@ package foundry.veil.mixin.command.client;
 import foundry.veil.ext.VeilClientSuggestionProvider;
 import foundry.veil.impl.command.VeilClientSuggestions;
 import net.minecraft.client.multiplayer.ClientSuggestionProvider;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.spongepowered.asm.mixin.Mixin;
 
 import java.util.stream.Stream;
@@ -12,7 +12,7 @@ import java.util.stream.Stream;
 public class ClientCommandSourceMixin implements VeilClientSuggestionProvider {
 
     @Override
-    public Stream<ResourceLocation> veil$getPostPipelineNames() {
+    public Stream<Identifier> veil$getPostPipelineNames() {
         return VeilClientSuggestions.getPostPipelineNames();
     }
 }

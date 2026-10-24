@@ -1,124 +1,53 @@
 package foundry.veil.api.client.render.texture;
 
-import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
-import foundry.veil.mixin.pipeline.accessor.PipelineNativeImageAccessor;
+import net.minecraft.client.renderer.texture.TextureContents;
 import net.minecraft.core.Direction;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManager;
-
 import java.io.IOException;
+import java.util.*;
 
-import static org.lwjgl.opengl.GL11C.*;
-import static org.lwjgl.opengl.GL12C.*;
-import static org.lwjgl.opengl.GL13C.GL_TEXTURE_CUBE_MAP;
-import static org.lwjgl.opengl.GL13C.GL_TEXTURE_CUBE_MAP_POSITIVE_X;
-import static org.lwjgl.opengl.GL14C.GL_TEXTURE_LOD_BIAS;
-
-/**
- * Dynamic implementation of {@link CubemapTexture}. Must call {@link #init(int, int)} before it can be used.
- *
- * @author Ocelot
- */
+/** Dynamic real cube storage; owned CPU faces retain its current pixels across native resource reload. */
 public class DynamicCubemapTexture extends CubemapTexture {
-
-    private final int[] width;
-    private final int[] height;
-
-    public DynamicCubemapTexture() {
-        this.width = new int[6];
-        this.height = new int[6];
+    private List<NativeImage> faces=List.of();
+    public DynamicCubemapTexture(){super(Identifier.fromNamespaceAndPath("veil","dynamic_cubemap"));}
+    private static void validate(int width,int height){if(width<=0||width!=height)throw new IllegalArgumentException("Cubemap faces must be positive squares");}
+    public synchronized void init(int width,int height) {
+        RenderSystem.assertOnRenderThread();validate(width,height);final var replacements=new ArrayList<NativeImage>();
+        try {
+            for(int face=0;face<6;face++) {final var image=new NativeImage(width,height,false);replacements.add(image);for(int y=0;y<height;y++)for(int x=0;x<width;x++)image.setPixel(x,y,0xffffffff);}
+            replace(replacements);
+        } catch(RuntimeException|Error failure){replacements.forEach(NativeImage::close);throw failure;}
     }
-
-    private void init(int face, int width, int height) {
-        this.width[face] = width;
-        this.height[face] = height;
-        RenderSystem.assertOnRenderThreadOrInit();
-        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0L);
+    private void replace(List<NativeImage> replacements) {
+        apply(new TextureContents(NativeTextureImages.stack(replacements),null));
+        final var previous=faces;faces=List.copyOf(replacements);previous.forEach(NativeImage::close);
     }
-
-    /**
-     * Initializes each face to the same size white texture.
-     *
-     * @param width  The width of each face
-     * @param height The height of each face
-     */
-    public void init(int width, int height) {
-        this.bind();
-        this.setFilter(false, false);
-        GlStateManager._texParameter(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, 0);
-        GlStateManager._texParameter(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_LOD, 0);
-        GlStateManager._texParameter(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LOD, 0);
-        GlStateManager._texParameter(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_LOD_BIAS, 0.0F);
-
-        RenderSystem.assertOnRenderThreadOrInit();
-        for (int i = 0; i < 6; i++) {
-            this.init(i, width, height);
-        }
+    public synchronized void upload(NativeImage image) {
+        RenderSystem.assertOnRenderThread();validate(image.getWidth(),image.getHeight());final var replacements=new ArrayList<NativeImage>();
+        try {for(int face=0;face<6;face++)replacements.add(NativeTextureImages.copy(image));replace(replacements);}
+        catch(RuntimeException|Error failure){replacements.forEach(NativeImage::close);throw failure;}
     }
-
-    /**
-     * Uploads the same image to all faces of the cubemap.
-     *
-     * @param image The image to upload
-     */
-    public void upload(NativeImage image) {
-        this.init(image.getWidth(), image.getHeight());
-
-        int width = image.getWidth();
-        int height = image.getHeight();
-        RenderSystem.assertOnRenderThreadOrInit();
-        PipelineNativeImageAccessor accessor = (PipelineNativeImageAccessor) (Object) image;
-        accessor.invokeCheckAllocated();
-        GlStateManager._pixelStore(GL_UNPACK_ROW_LENGTH, 0);
-        GlStateManager._pixelStore(GL_UNPACK_SKIP_ROWS, 0);
-        GlStateManager._pixelStore(GL_UNPACK_SKIP_PIXELS, 0);
-        NativeImage.Format format = image.format();
-        format.setUnpackPixelStoreState();
-        for (int i = 0; i < 6; i++) {
-            GlStateManager._texSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, 0, 0, width, height, format.glFormat(), GL_UNSIGNED_BYTE, accessor.getPixels());
-        }
+    public void upload(Direction face,NativeImage image){upload(faceIndex(face),image);}
+    /** Face index is native +X,-X,+Y,-Y,+Z,-Z; there are no backend integer enums. */
+    public synchronized void upload(int face,NativeImage image) {
+        RenderSystem.assertOnRenderThread();if(face<0||face>=6)throw new IllegalArgumentException("Cubemap face index must be 0..5");
+        validate(image.getWidth(),image.getHeight());
+        if(faces.isEmpty())init(image.getWidth(),image.getHeight());
+        if(image.getWidth()!=faces.getFirst().getWidth())throw new IllegalArgumentException("Call init to resize all cubemap faces together");
+        final var replacement=NativeTextureImages.copy(image);
+        try {
+            final var encoder=RenderSystem.getDevice().createCommandEncoder();
+            final var staging=encoder.transientMemory().uploadStaging(replacement.getPixelBytes(),1,16);
+            encoder.copyBufferToTexture(staging,0,0,image.getWidth(),image.getHeight(),getTexture(),0,0,image.getWidth(),image.getHeight(),0,face);encoder.submit();
+        } catch(RuntimeException|Error failure){replacement.close();throw failure;}
+        final var updated=new ArrayList<>(faces);final var previous=updated.set(face,replacement);faces=List.copyOf(updated);previous.close();
     }
-
-    /**
-     * Uploads the specified image to the specified face.
-     *
-     * @param face  The face to upload to
-     * @param image The image to upload
-     */
-    public void upload(Direction face, NativeImage image) {
-        this.upload(getGlFace(face), image);
+    @Override public synchronized TextureContents loadContents(ResourceManager resources)throws IOException {
+        if(faces.isEmpty())throw new IOException("Dynamic cubemap must be initialized before reload");
+        return new TextureContents(NativeTextureImages.stack(faces),null);
     }
-
-    /**
-     * Uploads the specified image to the specified face.
-     *
-     * @param face  The face to upload to
-     * @param image The image to upload
-     */
-    public void upload(int face, NativeImage image) {
-        if (this.id == -1) {
-            this.init(image.getWidth(), image.getHeight());
-        } else if (this.width[face - GL_TEXTURE_CUBE_MAP_POSITIVE_X] != image.getWidth() || this.height[face - GL_TEXTURE_CUBE_MAP_POSITIVE_X] != image.getHeight()) {
-            this.init(face, image.getWidth(), image.getHeight());
-        } else {
-            this.bind();
-        }
-
-        int width = image.getWidth();
-        int height = image.getHeight();
-        RenderSystem.assertOnRenderThreadOrInit();
-        PipelineNativeImageAccessor accessor = (PipelineNativeImageAccessor) (Object) image;
-        accessor.invokeCheckAllocated();
-        GlStateManager._pixelStore(GL_UNPACK_ROW_LENGTH, 0);
-        GlStateManager._pixelStore(GL_UNPACK_SKIP_ROWS, 0);
-        GlStateManager._pixelStore(GL_UNPACK_SKIP_PIXELS, 0);
-        NativeImage.Format format = image.format();
-        format.setUnpackPixelStoreState();
-        GlStateManager._texSubImage2D(face, 0, 0, 0, width, height, format.glFormat(), GL_UNSIGNED_BYTE, accessor.getPixels());
-    }
-
-    @Override
-    public void load(ResourceManager resourceManager) throws IOException {
-    }
+    @Override public synchronized void close(){faces.forEach(NativeImage::close);faces=List.of();super.close();}
 }

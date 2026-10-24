@@ -3,7 +3,7 @@ package foundry.veil.api.client.render.post.uniform;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import foundry.veil.api.client.render.shader.uniform.ShaderUniform;
+import foundry.veil.api.client.render.gpu.GpuUniformBuffer;
 import org.joml.Matrix2f;
 import org.joml.Matrix2fc;
 
@@ -28,8 +28,8 @@ public record Matrix2Uniform(Matrix2fc value) implements UniformValue {
     ).apply(instance, Matrix2Uniform::new));
 
     @Override
-    public void apply(ShaderUniform uniform) {
-        uniform.setMatrix(this.value);
+    public void apply(GpuUniformBuffer uniform, String name) {
+        uniform.setMatrix(name, this.value);
     }
 
     @Override

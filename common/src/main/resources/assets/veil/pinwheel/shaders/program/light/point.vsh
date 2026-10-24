@@ -3,19 +3,13 @@
 layout (location = 0) in vec3 Position;
 layout (location = 1) in vec3 LightPosition;
 layout (location = 2) in vec3 Color;
-layout (location = 3) in vec3 Settings;
+layout (location = 3) in float Distance;
+layout (location = 4) in float Occluded;
 
-#define Distance Settings.x
-#define Occluded Settings.y
-#define Inscattering Settings.z
-
-out vec3 lightPos;
-out vec3 lightColor;
-out float radius;
-out float occluded;
-#ifdef INSCATTERING
-out float inscattering;
-#endif
+layout(location=0) out vec3 lightPos;
+layout(location=1) out vec3 lightColor;
+layout(location=2) out float radius;
+layout(location=3) out float occluded;
 
 void main() {
     vec3 size = Position * Distance;
@@ -28,7 +22,4 @@ void main() {
     lightColor = Color;
     radius = Distance;
     occluded = Occluded;
-    #ifdef INSCATTERING
-    inscattering = Inscattering;
-    #endif
 }

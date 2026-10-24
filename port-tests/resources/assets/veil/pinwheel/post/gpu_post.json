@@ -1,0 +1,77 @@
+{
+  "framebuffers": {
+    "scratch": {
+      "width": "q.screen_width / 2",
+      "height": "q.screen_height / 2",
+      "depth": false
+    }
+  },
+  "stages": [
+    {
+      "type": "veil:mask",
+      "red": false,
+      "green": true,
+      "blue": true,
+      "alpha": false
+    },
+    {
+      "type": "veil:blit",
+      "shader": "veil:gpu_post",
+      "in": "minecraft:main",
+      "out": "veil:post",
+      "clear": false,
+      "uniforms": {
+        "TintColor": {
+          "type": "float",
+          "value": [
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "type": "veil:copy",
+      "in": "veil:post",
+      "out": "scratch",
+      "linear": true
+    },
+    {
+      "type": "veil:copy",
+      "in": "scratch",
+      "out": "veil:post",
+      "linear": false
+    },
+    {
+      "type": "veil:mask",
+      "red": true,
+      "green": true,
+      "blue": true,
+      "alpha": true
+    },
+    {
+      "type": "veil:depth_function",
+      "function": "NEVER"
+    },
+    {
+      "type": "veil:blit",
+      "shader": "veil:gpu_post",
+      "in": "minecraft:main",
+      "out": "veil:post",
+      "clear": false,
+      "uniforms": {
+        "TintColor": {
+          "type": "float",
+          "value": [
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  ]
+}

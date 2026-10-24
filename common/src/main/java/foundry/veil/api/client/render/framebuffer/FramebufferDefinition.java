@@ -4,14 +4,13 @@ import com.mojang.datafixers.util.Either;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import foundry.veil.api.client.render.VeilRenderSystem;
+import foundry.veil.api.client.render.gpu.GpuFramebuffer;
 import foundry.veil.api.client.render.texture.TextureFilter;
 import foundry.veil.api.molang.MolangExpressionCodec;
 import foundry.veil.api.molang.VeilMolang;
 import gg.moonflower.molangcompiler.api.MolangEnvironment;
 import gg.moonflower.molangcompiler.api.MolangExpression;
 import gg.moonflower.molangcompiler.api.MolangRuntime;
-import org.apache.commons.lang3.Validate;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Arrays;
@@ -145,60 +144,32 @@ public record FramebufferDefinition(MolangExpression width,
         }
     }
 
-    /**
-     * Creates a new builder from this framebuffer.
-     *
-     * @param screenWidth  The width of the screen
-     * @param screenHeight The height of the screen
-     * @return A new {@link AdvancedFbo.Builder} that can be turned into a framebuffer.
-     * All defined attachments are created and added to the builder
-     */
-    public AdvancedFbo.Builder createBuilder(int screenWidth, int screenHeight) {
+    /** Build native storage; the definition retains the explicit sampling-filter state. */
+    public GpuFramebuffer.Builder createBuilder(int screenWidth, int screenHeight) {
         MolangRuntime runtime = MolangRuntime.runtime()
                 .setQuery("screen_width", screenWidth)
-                .setQuery("screen_height", screenHeight)
-                .create();
+                .setQuery("screen_height", screenHeight).create();
         return this.createBuilder(runtime);
     }
 
-    /**
-     * Creates a new builder from this framebuffer.
-     *
-     * @param environment The environment to evaluate the size in
-     * @return A new {@link AdvancedFbo.Builder} that can be turned into a framebuffer.
-     * All defined attachments are created and added to the builder
-     */
-    public AdvancedFbo.Builder createBuilder(MolangEnvironment environment) {
+    public GpuFramebuffer.Builder createBuilder(MolangEnvironment environment) {
         int width = (int) environment.safeResolve(this.width);
         int height = (int) environment.safeResolve(this.height);
-        int maxWidth = VeilRenderSystem.maxFramebufferWidth();
-        int maxHeight = VeilRenderSystem.maxFramebufferHeight();
-        Validate.inclusiveBetween(1, maxWidth, width, "width must be between 1 and " + maxWidth);
-        Validate.inclusiveBetween(1, maxHeight, height, "height must be between 1 and " + maxHeight);
-        AdvancedFbo.Builder builder = AdvancedFbo.withSize(width, height);
-
+        GpuFramebuffer.Builder builder = GpuFramebuffer.builder("Veil resource framebuffer", width, height);
         for (FramebufferAttachmentDefinition definition : this.colorBuffers) {
-            builder.setLevels(definition.levels()).setFormat(definition.format());
-            if (definition.type() == FramebufferAttachmentDefinition.Type.RENDER_BUFFER) {
-                builder.addColorRenderBuffer();
-            } else {
-                builder.setFilter(definition.filter())
-                        .setName(definition.name())
-                        .addColorTextureBuffer();
-            }
+            validateLevels(definition);
+            builder.color(definition.format().gpuFormat());
         }
-
         if (this.depthBuffer != null) {
-            builder.setLevels(this.depthBuffer.levels()).setFormat(this.depthBuffer.format());
-            if (this.depthBuffer.type() == FramebufferAttachmentDefinition.Type.RENDER_BUFFER) {
-                builder.setDepthRenderBuffer();
-            } else {
-                builder.setFilter(this.depthBuffer.filter())
-                        .setName(this.depthBuffer.name())
-                        .setDepthTextureBuffer();
-            }
+            validateLevels(this.depthBuffer);
+            builder.depth(this.depthBuffer.format().gpuFormat());
         }
-
         return builder;
+    }
+
+    private static void validateLevels(FramebufferAttachmentDefinition attachment) {
+        if (attachment.levels() != 1) {
+            throw new UnsupportedOperationException("Resource framebuffer mipmap/MSAA levels require explicit native views/resolves: " + attachment.levels());
+        }
     }
 }

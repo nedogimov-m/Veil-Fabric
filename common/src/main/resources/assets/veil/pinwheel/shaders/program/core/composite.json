@@ -5,10 +5,6 @@
     "LightSampler": {
       "type": "framebuffer",
       "name": "veil:light"
-    },
-    "LightInscatteringSampler": {
-      "type": "framebuffer",
-      "name": "veil:light_inscattering"
     }
   }
 }

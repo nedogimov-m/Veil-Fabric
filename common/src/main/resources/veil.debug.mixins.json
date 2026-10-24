@@ -2,29 +2,26 @@
   "required": true,
   "minVersion": "0.8",
   "package": "foundry.veil.mixin.debug",
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_25",
   "plugin": "foundry.veil.VeilMixinPluginImpl",
   "mixins": [
     "SimpleReloadInstanceMixin"
   ],
   "client": [
-    "accessor.DebugGameRendererAccessor",
-    "accessor.DebugLevelRendererAccessor",
-    "accessor.DebugPostChainAccessor",
+    "accessor.DebugPipelineCacheAccessor",
+    "client.DebugPipelineCacheMixin",
     "client.DebugActiveProfilerMixin",
-    "client.DebugAutoStorageIndexBufferMixin",
     "client.DebugGlDebugMixin",
     "client.DebugKeyboardHandlerMixin",
-    "client.DebugLevelRendererMixin",
     "client.DebugMainMixin",
     "client.DebugMinecraftMixin",
-    "client.DebugTextureManagerMixin",
-    "client.DebugVertexBufferMixin",
-    "client.DebugVertexFormatMixin",
-    "client.profiler.GameRendererMixin"
+    "client.profiler.GameRendererMixin",
+    "client.NativeVulkanDebugMixin",
+    "client.NativeDiagnosticsEncoderMixin",
+    "client.NativeDiagnosticsPassMixin",
+    "client.profiler.NativeGuiProfilerMixin"
   ],
   "injectors": {
     "defaultRequire": 1
   }
 }
-  

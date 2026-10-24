@@ -1,7 +1,6 @@
 package foundry.veil.api.client.registry;
 
 import com.mojang.serialization.MapCodec;
-import foundry.veil.Veil;
 import foundry.veil.api.client.render.post.PostPipeline;
 import foundry.veil.api.client.render.post.stage.BlitPostStage;
 import foundry.veil.api.client.render.post.stage.CopyPostStage;
@@ -10,6 +9,7 @@ import foundry.veil.api.client.render.post.stage.MaskPostStage;
 import foundry.veil.platform.registry.RegistrationProvider;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.util.function.Supplier;
@@ -19,8 +19,8 @@ import java.util.function.Supplier;
  */
 public final class PostPipelineStageRegistry {
 
-    public static final ResourceKey<Registry<PipelineType<?>>> REGISTRY_KEY = ResourceKey.createRegistryKey(Veil.veilPath("post_pipeline_stage"));
-    private static final RegistrationProvider<PipelineType<?>> PROVIDER = RegistrationProvider.get(REGISTRY_KEY, Veil.MODID);
+    public static final ResourceKey<Registry<PipelineType<?>>> REGISTRY_KEY = ResourceKey.createRegistryKey(Identifier.fromNamespaceAndPath("veil", "post_pipeline_stage"));
+    private static final RegistrationProvider<PipelineType<?>> PROVIDER = RegistrationProvider.get(REGISTRY_KEY, "veil");
     public static final Registry<PipelineType<?>> REGISTRY = PROVIDER.asVanillaRegistry();
 
     public static final Supplier<PipelineType<BlitPostStage>> BLIT = register("blit", BlitPostStage.CODEC);

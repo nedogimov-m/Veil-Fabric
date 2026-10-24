@@ -1,13 +1,12 @@
 package foundry.veil.api.client.render.post.stage;
 
-import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.pipeline.CompareOp;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.MapCodec;
 import foundry.veil.api.client.registry.PostPipelineStageRegistry;
 import foundry.veil.api.client.render.post.PostPipeline;
 
-import static org.lwjgl.opengl.GL11C.*;
 
 /**
  * Sets the depth function.
@@ -21,7 +20,7 @@ public record DepthFunctionPostStage(DepthFunc func) implements PostPipeline {
 
     @Override
     public void apply(Context context) {
-        RenderSystem.depthFunc(this.func.getId());
+        context.setDepthState(this.func.comparison(), context.writeDepth());
     }
 
     @Override
@@ -30,14 +29,14 @@ public record DepthFunctionPostStage(DepthFunc func) implements PostPipeline {
     }
 
     public enum DepthFunc {
-        NEVER(GL_NEVER),
-        LESS(GL_LESS),
-        EQUAL(GL_EQUAL),
-        LEQUAL(GL_LEQUAL),
-        GREATER(GL_GREATER),
-        NOTEQUAL(GL_NOTEQUAL),
-        GEQUAL(GL_GEQUAL),
-        ALWAYS(GL_ALWAYS);
+        NEVER(CompareOp.NEVER_PASS),
+        LESS(CompareOp.GREATER_THAN),
+        EQUAL(CompareOp.EQUAL),
+        LEQUAL(CompareOp.GREATER_THAN_OR_EQUAL),
+        GREATER(CompareOp.LESS_THAN),
+        NOTEQUAL(CompareOp.NOT_EQUAL),
+        GEQUAL(CompareOp.LESS_THAN_OR_EQUAL),
+        ALWAYS(CompareOp.ALWAYS_PASS);
 
         public static final Codec<DepthFunc> CODEC = Codec.STRING.flatXmap(name -> {
             for (DepthFunc type : DepthFunc.values()) {
@@ -48,17 +47,17 @@ public record DepthFunctionPostStage(DepthFunc func) implements PostPipeline {
             return DataResult.error(() -> "Unknown depth function: " + name);
         }, type -> DataResult.success(type.name()));
 
-        private final int id;
+        private final CompareOp comparison;
 
-        DepthFunc(int id) {
-            this.id = id;
+        DepthFunc(CompareOp comparison) {
+            this.comparison = comparison;
         }
 
         /**
-         * @return The OpenGL id of this data type
+         * @return The immutable native depth comparison
          */
-        public int getId() {
-            return this.id;
+        public CompareOp comparison() {
+            return this.comparison;
         }
     }
 }

@@ -1,9 +1,10 @@
 {
   "vertex": "veil:necromancer/skinned_mesh",
   "fragment": "veil:necromancer/skinned_mesh",
-  "definitions": [
-    {
-      "NECROMANCER_BONE_BUFFER_SIZE": 256
-    }
+  "uniform_blocks": [
+    "Projection",
+    "DynamicTransforms",
+    "Fog",
+    "Lighting"
   ]
 }

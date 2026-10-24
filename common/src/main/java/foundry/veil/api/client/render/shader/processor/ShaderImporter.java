@@ -1,7 +1,7 @@
 package foundry.veil.api.client.render.shader.processor;
 
 import io.github.ocelot.glslprocessor.api.node.GlslTree;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.io.IOException;
 import java.util.Collection;
@@ -21,10 +21,10 @@ public interface ShaderImporter {
      * @return An immutable view of the nodes inside the import
      * @throws IOException If there was an error loading the import file
      */
-    GlslTree loadImport(ShaderPreProcessor.Context context, ResourceLocation name, boolean force) throws IOException;
+    GlslTree loadImport(ShaderPreProcessor.Context context, Identifier name, boolean force) throws IOException;
 
     /**
      * @return A view of all imports added to the current file
      */
-    Collection<ResourceLocation> addedImports();
+    Collection<Identifier> addedImports();
 }

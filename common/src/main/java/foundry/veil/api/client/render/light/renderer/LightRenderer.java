@@ -7,12 +7,25 @@ import foundry.veil.api.client.render.CullFrustum;
 import foundry.veil.api.client.render.VeilRenderSystem;
 import foundry.veil.api.client.render.VeilRenderer;
 import foundry.veil.api.client.render.dynamicbuffer.DynamicBufferType;
-import foundry.veil.api.client.render.framebuffer.AdvancedFbo;
+import foundry.veil.api.client.render.gpu.GpuFramebuffer;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
+import foundry.veil.api.client.render.gpu.NativeLightPass;
+import foundry.veil.api.client.render.texture.TextureFilter;
+import foundry.veil.impl.client.render.pipeline.VeilShaderBlockState;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
+import com.mojang.renderpearl.api.GpuFormat;
+import org.jetbrains.annotations.Nullable;
+import org.joml.Vector4f;
+import java.util.List;
+import java.util.HashMap;
 import foundry.veil.api.client.render.light.data.LightData;
 import foundry.veil.api.client.render.vertex.VertexArray;
 import foundry.veil.impl.client.render.light.VoxelShadowGrid;
 import it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.UnmodifiableView;
 import org.lwjgl.system.NativeResource;
@@ -23,7 +36,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-import static org.lwjgl.opengl.GL11C.*;
+
 
 /**
  * Renders all lights in a scene.
@@ -35,7 +48,7 @@ import static org.lwjgl.opengl.GL11C.*;
  */
 public final class LightRenderer implements NativeResource {
 
-    private static final ResourceLocation BUFFER_ID = Veil.veilPath("lights");
+    private static final Identifier BUFFER_ID = Veil.veilPath("lights");
     private final Map<LightTypeRegistry.LightType<?>, LightTypeRenderer<?>> renderers;
     private final Map<LightTypeRegistry.LightType<?>, LightTypeRenderer<?>> renderersView;
 
@@ -53,62 +66,73 @@ public final class LightRenderer implements NativeResource {
      * @param lightFbo The framebuffer to render lights into
      * @return If any lights were actually rendered
      */
+    private final Map<DrawState, RenderPipeline> pipelines = new HashMap<>();
+    private @Nullable GpuFramebuffer activeTarget;
+    private @Nullable GpuFramebuffer activeSource;
+
     @ApiStatus.Internal
-    public boolean render(CullFrustum frustum, AdvancedFbo lightFbo, AdvancedFbo lightInscatteringFbo, boolean renderInscattering) {
-        boolean hasRendered = false;
-        boolean setupDDA = false;
-        VeilRenderer renderer = VeilRenderSystem.renderer();
-
-        for (LightTypeRenderer<?> lightRenderer : this.renderers.values()) {
-            lightRenderer.prepareLights(this, frustum);
-
-            // If there are no visible lights, then don't render anything
-            if (lightRenderer.getVisibleLights() <= 0) {
-                continue;
-            }
-
-            if (!hasRendered) {
-                if (renderer.enableBuffers(BUFFER_ID, DynamicBufferType.ALBEDO, DynamicBufferType.NORMAL)) {
-                    return false;
-                }
-
-                lightFbo.bind(true);
-                lightFbo.clear(GL_COLOR_BUFFER_BIT);
-                AdvancedFbo.getMainFramebuffer().resolveToAdvancedFbo(lightFbo, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-            }
-
-            hasRendered = true;
-
-            // Decide if the DDA needs to be updated
-            if (lightRenderer instanceof DDALightRenderer<?> ddalightRenderer) {
-                if (!setupDDA) {
-                    VoxelShadowGrid.setup();
-                    setupDDA = true;
-                }
-                ddalightRenderer.uploadVoxelGridUniforms(VoxelShadowGrid.getTextureId(), VoxelShadowGrid.getUniformGridPos());
-            }
-            lightRenderer.renderLights(this);
-
-            if (lightRenderer instanceof InscatteringLightRenderer<?> inscatteringLightRenderer && renderInscattering) {
-                lightInscatteringFbo.bind(true);
-                AdvancedFbo.getMainFramebuffer().resolveToAdvancedFbo(lightInscatteringFbo, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-                inscatteringLightRenderer.renderLightInscattering(this);
-                AdvancedFbo.unbind();
-            }
-        }
-
-        if (hasRendered && !renderInscattering) {
-            lightInscatteringFbo.clear(GL_COLOR_BUFFER_BIT);
-        }
-
-        if (!hasRendered) {
-            renderer.disableBuffers(BUFFER_ID, DynamicBufferType.ALBEDO, DynamicBufferType.NORMAL);
-            return false;
-        }
-
-        VertexArray.unbind();
-        return true;
+    public boolean render(CullFrustum frustum, GpuFramebuffer target) {
+        return this.render(frustum, target, VeilRenderSystem.getMainFramebuffer());
     }
+
+    /** Uses the depth belonging to this scene, including an independent first-person scene. */
+    @ApiStatus.Internal
+    public boolean render(CullFrustum frustum, GpuFramebuffer target, GpuFramebuffer sceneSource) {
+        if (this.activeTarget != null) throw new IllegalStateException("Light preparation cannot nest");
+        Objects.requireNonNull(sceneSource, "Light scene source");
+        VeilRenderer owner = VeilRenderSystem.renderer();
+        boolean visible = false;
+        for (var renderer : this.renderers.values()) {
+            renderer.prepareLights(this, frustum);
+            visible |= renderer.getVisibleLights() > 0;
+        }
+        if (!visible) { owner.disableBuffers(BUFFER_ID); return false; }
+        int required = DynamicBufferType.encode(DynamicBufferType.ALBEDO, DynamicBufferType.NORMAL);
+        boolean changed = owner.enableBuffers(BUFFER_ID, DynamicBufferType.ALBEDO, DynamicBufferType.NORMAL);
+        if (changed || (owner.getDynamicBufferManger().getAvailableBuffers() & required) != required) return false;
+        var encoder = RenderSystem.getDevice().createCommandEncoder();
+        target.clear(encoder, new Vector4f(0), 0);
+        if (target.hasDepth()) sceneSource.copyDepthTo(encoder, target);
+        encoder.submit();
+        this.activeTarget = target;
+        this.activeSource = sceneSource;
+        try {
+            boolean gridPrepared = false;
+            for (var renderer : this.renderers.values()) {
+                if (renderer.getVisibleLights() == 0) continue;
+                if (renderer instanceof DDALightRenderer<?> dda) {
+                    if (!gridPrepared) { VoxelShadowGrid.setup(); gridPrepared = true; }
+                    dda.uploadVoxelGridUniforms(VoxelShadowGrid.getTextureView(), VoxelShadowGrid.getSampler(), VoxelShadowGrid.getUniformGridPos());
+                }
+                renderer.renderLights(this);
+            }
+            return true;
+        } finally { this.activeSource = null; this.activeTarget = null; }
+    }
+
+    /** Draw one native instanced light batch or fullscreen directional light and submit it. */
+    public void draw(CommandEncoder encoder, Identifier shader, @Nullable VertexArray mesh, int instances,
+                     boolean volume, Consumer<GpuShaderProgram> uniforms) {
+        GpuFramebuffer target = Objects.requireNonNull(this.activeTarget, "Light draw outside its target scope");
+        Map<Integer, VertexFormat> formats = mesh == null ? Map.of() : mesh.formats();
+        PrimitiveTopology topology = mesh == null ? PrimitiveTopology.TRIANGLES : mesh.getDrawMode();
+        var key = new DrawState(shader, formats, topology, target.color(0).texture().getFormat(), volume);
+        var definition = this.pipelines.computeIfAbsent(key, ignored -> NativeLightPass.pipeline(shader, formats, topology, target, volume));
+        var owner = VeilRenderSystem.renderer();
+        var program = owner.getShaderManager().getShader(shader, definition, Runnable::run);
+        var buffers = owner.getDynamicBufferManger();
+        program.setTexture("AlbedoSampler", buffers.getBufferTexture(DynamicBufferType.ALBEDO), TextureFilter.CLAMP);
+        program.setTexture("NormalSampler", buffers.getBufferTexture(DynamicBufferType.NORMAL), TextureFilter.CLAMP);
+        if (volume) program.setTexture("DepthSampler", Objects.requireNonNull(this.activeSource, "Light draw outside its scene scope").depth().view(), TextureFilter.CLAMP);
+        program.getUniformSafe("ScreenSize").setVector((float)target.width(), (float)target.height());
+        uniforms.accept(program);
+        var blocks = VeilShaderBlockState.prepareSnapshots(encoder, VeilRenderSystem.captureShaderBlockSnapshots(program.uniformBlockSizes().keySet()));
+        try (var lease = program.retain(); var draw = mesh == null ? null : mesh.retain()) {
+            NativeLightPass.record(encoder, target, program, draw, instances, blocks);
+            encoder.submit();
+        }
+    }
+    private record DrawState(Identifier shader, Map<Integer, VertexFormat> formats, PrimitiveTopology topology, GpuFormat color, boolean volume) { }
 
     /**
      * Adds a light to the renderer.
@@ -118,7 +142,7 @@ public final class LightRenderer implements NativeResource {
     @SuppressWarnings("unchecked")
     public <T extends LightData> LightRenderHandle<T> addLight(T lightData) {
         Objects.requireNonNull(lightData, "light");
-        RenderSystem.assertOnRenderThreadOrInit();
+        RenderSystem.assertOnRenderThread();
         return ((LightTypeRenderer<T>) this.renderers.computeIfAbsent(lightData.getType(), lightType -> lightType.rendererFactory().createRenderer())).addLight(lightData);
     }
 
@@ -131,7 +155,7 @@ public final class LightRenderer implements NativeResource {
     @SuppressWarnings("unchecked")
     public <T extends LightData> LightRenderHandle<T> addLight(LightRenderHandle<T> handle) {
         Objects.requireNonNull(handle, "light");
-        RenderSystem.assertOnRenderThreadOrInit();
+        RenderSystem.assertOnRenderThread();
         return ((LightTypeRenderer<T>) this.renderers.computeIfAbsent(handle.getLightData().getType(), lightType -> lightType.rendererFactory().createRenderer())).steal(handle);
     }
 
@@ -160,6 +184,9 @@ public final class LightRenderer implements NativeResource {
     public void free() {
         this.renderers.values().forEach(LightTypeRenderer::free);
         this.renderers.clear();
+        var owner = VeilRenderSystem.renderer().getShaderManager();
+        this.pipelines.forEach((state, pipeline) -> owner.releaseShader(state.shader, pipeline));
+        this.pipelines.clear();
     }
 
     @ApiStatus.Internal

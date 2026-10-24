@@ -1,0 +1,9 @@
+{
+  "vertex": "veil:core/gpu_blit",
+  "fragment": "veil:core/gpu_post",
+  "definitions": [
+    {
+      "veil_program_gain": "1"
+    }
+  ]
+}

@@ -1,45 +1,17 @@
 package foundry.veil.api.client.render.texture;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonSyntaxException;
-import net.minecraft.server.packs.metadata.MetadataSectionSerializer;
-import net.minecraft.util.GsonHelper;
-import org.jetbrains.annotations.NotNull;
-
-import java.util.Arrays;
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.DataResult;
+import net.minecraft.server.packs.metadata.MetadataSectionType;
 import java.util.Locale;
-import java.util.stream.Collectors;
 
+/** Native metadata codec retains the original veil:texture_type section and type strings. */
 public record TextureTypeMetadataSection(TextureType type) {
-
-    public static final Serializer SERIALIZER = new Serializer();
-
-    public enum TextureType {
-        TEXTURE_2D,
-        TEXTURE_2D_ARRAY,
-        TEXTURE_CUBE_MAP;
-
-        private static final TextureType[] VALUES = TextureType.values();
-    }
-
-    public static class Serializer implements MetadataSectionSerializer<TextureTypeMetadataSection> {
-
-        @Override
-        public TextureTypeMetadataSection fromJson(@NotNull JsonObject json) {
-            String type = GsonHelper.getAsString(json, "type", "2d");
-            for (TextureType value : TextureType.VALUES) {
-                if (value.name().substring(8).equalsIgnoreCase(type)) {
-                    return new TextureTypeMetadataSection(value);
-                }
-            }
-            throw new JsonSyntaxException("Unknown texture type: " + type + ". Expected one of " + Arrays.stream(TextureType.VALUES)
-                    .map(textureType -> textureType.name().toLowerCase(Locale.ROOT))
-                    .collect(Collectors.joining(", ")));
-        }
-
-        @Override
-        public @NotNull String getMetadataSectionName() {
-            return "veil:texture_type";
-        }
-    }
+    public enum TextureType {TEXTURE_2D,TEXTURE_2D_ARRAY,TEXTURE_CUBE_MAP;}
+    public static final Codec<TextureTypeMetadataSection> CODEC=Codec.STRING.comapFlatMap(name->{
+        for(var type:TextureType.values())if(type.name().substring(8).equalsIgnoreCase(name))return DataResult.success(type);
+        return DataResult.error(()->"Unknown texture type: "+name+". Expected 2d, 2d_array or cube_map");
+    },type->type.name().substring(8).toLowerCase(Locale.ROOT)).optionalFieldOf("type",TextureType.TEXTURE_2D)
+            .xmap(TextureTypeMetadataSection::new,TextureTypeMetadataSection::type).codec();
+    public static final MetadataSectionType<TextureTypeMetadataSection> TYPE=new MetadataSectionType<>("veil:texture_type",CODEC);
 }

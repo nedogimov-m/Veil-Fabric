@@ -1,14 +1,11 @@
 package foundry.veil.api.client.render.light.data;
 
-import com.mojang.blaze3d.vertex.VertexConsumer;
 import foundry.veil.api.client.color.Colorc;
 import foundry.veil.api.client.editor.EditorAttributeProvider;
 import foundry.veil.api.client.registry.LightTypeRegistry;
 import foundry.veil.api.client.render.CullFrustum;
-import foundry.veil.api.client.render.MatrixStack;
 import foundry.veil.api.client.render.light.DDALightData;
 import foundry.veil.api.client.render.light.InstancedLightData;
-import foundry.veil.api.client.render.light.LightGuideProvider;
 import imgui.ImGui;
 import net.minecraft.client.Camera;
 import net.minecraft.util.Mth;
@@ -24,7 +21,7 @@ import java.nio.ByteBuffer;
  *
  * @since 2.0.0
  */
-public class AreaLightData extends LightData implements InstancedLightData, DDALightData, EditorAttributeProvider, LightGuideProvider {
+public class AreaLightData extends LightData implements InstancedLightData, DDALightData, EditorAttributeProvider {
 
     private static final float MAX_ANGLE_SIZE = (float) (65535.0 / 2.0 / Math.PI);
 
@@ -37,7 +34,6 @@ public class AreaLightData extends LightData implements InstancedLightData, DDAL
     protected float angle;
     protected float distance;
     protected boolean occlusionEnabled;
-    protected float inscattering;
 
     public AreaLightData() {
         this.matrix = new Matrix4d();
@@ -49,7 +45,6 @@ public class AreaLightData extends LightData implements InstancedLightData, DDAL
         this.angle = (float) Math.toRadians(45);
         this.distance = 1.0F;
         this.occlusionEnabled = false;
-        this.inscattering = 0.0F;
     }
 
     /**
@@ -101,7 +96,6 @@ public class AreaLightData extends LightData implements InstancedLightData, DDAL
      * @since 4.3.0
      */
     public Quaternionf getOrientationMutable() {
-        this.markDirty();
         return this.orientation;
     }
 
@@ -143,14 +137,6 @@ public class AreaLightData extends LightData implements InstancedLightData, DDAL
     }
 
     /**
-     * @return The strength of the light's in-scattering effect.
-     * @since 4.4.0
-     */
-    public float getInscatteringStrength() {
-        return this.inscattering;
-    }
-
-    /**
      * Sets the size of the light's surface
      *
      * @param x The length, in blocks, of the light's surface.
@@ -186,15 +172,6 @@ public class AreaLightData extends LightData implements InstancedLightData, DDAL
 
     public AreaLightData setOcclusionEnabled(boolean occlusionEnabled) {
         this.occlusionEnabled = occlusionEnabled;
-        this.markDirty();
-        return this;
-    }
-
-    /**
-     * @since 4.4.0
-     */
-    public AreaLightData setInscatteringStrength(float inscattering) {
-        this.inscattering = inscattering;
         this.markDirty();
         return this;
     }
@@ -242,10 +219,8 @@ public class AreaLightData extends LightData implements InstancedLightData, DDAL
         buffer.position(buffer.position() + Float.BYTES * 2);
 
         buffer.putShort((short) Mth.clamp((int) (this.angle * MAX_ANGLE_SIZE), 0, 65535));
-        buffer.position(buffer.position() + 2); // Padding
         buffer.putFloat(this.distance);
         buffer.putFloat(this.occlusionEnabled ? 1.0F : 0.0F);
-        buffer.putFloat(this.inscattering);
     }
 
     @Override
@@ -262,9 +237,9 @@ public class AreaLightData extends LightData implements InstancedLightData, DDAL
 
     @Override
     public LightData setTo(Camera camera) {
-        Vec3 pos = camera.getPosition();
+        Vec3 pos = camera.position();
         this.position.set(pos.x, pos.y, pos.z);
-        this.orientation.identity().lookAlong(camera.getLookVector().mul(-1), camera.getUpVector());
+        this.orientation.identity().lookAlong(new Vector3f(camera.forwardVector()).negate(), camera.upVector());
         this.markDirty();
         return this;
     }
@@ -285,8 +260,6 @@ public class AreaLightData extends LightData implements InstancedLightData, DDAL
 
         float[] editAngle = new float[]{this.angle};
         float[] editDistance = new float[]{this.distance};
-
-        float[] editInscattering = new float[]{this.inscattering};
 
         if (ImGui.dragFloat2("size", editSize, 0.02F, 0.0001F)) {
             this.setSize(editSize[0], editSize[1]);
@@ -344,44 +317,8 @@ public class AreaLightData extends LightData implements InstancedLightData, DDAL
         }
 
         if (ImGui.checkbox("Occluded", this.occlusionEnabled)) {
-            this.setOcclusionEnabled(!this.occlusionEnabled);
+            this.occlusionEnabled = !this.occlusionEnabled;
+            this.markDirty();
         }
-
-        if (ImGui.dragScalar("In-scattering", editInscattering, 0.01F, 0.0F)) {
-            this.setInscatteringStrength(editInscattering[0]);
-        }
-    }
-
-    @Override
-    public void renderLightGuide(MatrixStack stack, VertexConsumer consumer) {
-        stack.matrixPush();
-
-        stack.translate(this.position.x, this.position.y, this.position.z);
-        Vector3f rot = this.orientation.getEulerAnglesXYZ(new Vector3f()).mul(-1);
-        stack.rotate(new Quaternionf().rotateX(rot.x).rotateLocalY(rot.y).rotateLocalZ(rot.z));
-
-        Matrix4f pose = stack.position();
-
-        consumer.addVertex(pose, -this.size.x, -this.size.y, 0).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, -this.size.x,  this.size.y, 0).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose,  this.size.x,  this.size.y, 0).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose,  this.size.x, -this.size.y, 0).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, -this.size.x, -this.size.y, 0).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-
-        Vector3f endSize = new Vector3f(this.size.x + (this.distance * (float)Math.tan(this.angle * 0.5)), this.size.y + (this.distance * (float)Math.tan(this.angle * 0.5)), this.distance);
-
-        consumer.addVertex(pose, -endSize.x, -endSize.y, this.distance).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, -endSize.x, endSize.y, this.distance).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, -this.size.x,  this.size.y, 0).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, -endSize.x, endSize.y, this.distance).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, endSize.x, endSize.y, this.distance).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose,  this.size.x,  this.size.y, 0).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, endSize.x, endSize.y, this.distance).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, endSize.x, -endSize.y, this.distance).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose,  this.size.x, -this.size.y, 0).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, endSize.x, -endSize.y, this.distance).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-        consumer.addVertex(pose, -endSize.x, -endSize.y, this.distance).setColor(this.color.red(), this.color.green(), this.color.blue(), this.color.alpha());
-
-        stack.matrixPop();
     }
 }

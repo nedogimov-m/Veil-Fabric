@@ -1,0 +1,10 @@
+{
+  "vertex": "veil:core/gpu_blit",
+  "fragment": "veil:core/gpu_post",
+  "textures": {
+    "DiffuseSampler0": {
+      "type": "framebuffer",
+      "name": "minecraft:main"
+    }
+  }
+}

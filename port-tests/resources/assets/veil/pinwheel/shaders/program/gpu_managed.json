@@ -1,0 +1,9 @@
+{
+  "vertex": "veil:core/gpu_blit",
+  "fragment": "veil:core/gpu_managed",
+  "definitions": [{"veil_test_gain": "1.0"}],
+  "textures": {
+    "InSampler": {"type": "framebuffer", "name": "veil_test:input"}
+  },
+  "blend": {"srcrgb": "SRC_ALPHA", "dstrgb": "ONE_MINUS_SRC_ALPHA", "srcalpha": "ONE", "dstalpha": "ZERO"}
+}

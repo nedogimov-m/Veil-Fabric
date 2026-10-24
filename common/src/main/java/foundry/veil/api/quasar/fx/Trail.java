@@ -8,7 +8,7 @@ import foundry.veil.api.util.EnumCodec;
 import foundry.veil.impl.quasar.MathUtil;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
@@ -42,7 +42,7 @@ public class Trail {
     private TilingMode tilingMode = TilingMode.STRETCH;
     private int frequency = 1;
     private float minDistance = 0f;
-    private ResourceLocation texture = null;
+    private Identifier texture = null;
     private boolean additive = false;
     private boolean parentRotation = false;
     private int timeout = 0;
@@ -76,7 +76,7 @@ public class Trail {
         this.tilingMode = tilingMode;
     }
 
-    public void setTexture(ResourceLocation texture) {
+    public void setTexture(Identifier texture) {
         this.texture = texture;
     }
 
@@ -121,7 +121,7 @@ public class Trail {
         this.widthFunction = widthFunction;
     }
 
-    public @Nullable ResourceLocation getTexture() {
+    public @Nullable Identifier getTexture() {
         return this.texture;
     }
 
@@ -160,7 +160,7 @@ public class Trail {
     }
 
     @ApiStatus.Internal
-    public void render(MatrixStack stack, VertexConsumer consumer, int light, float partialTicks, Vec3 target, Vec3 targetRotation) {
+    public void render(MatrixStack stack, VertexConsumer consumer, int light, float partialTicks, Vec3 target, Vec3 targetRotation, Vec3 cameraPosition) {
         // Not enough geometry to render anything
         if (this.points.isEmpty()) {
             return;
@@ -197,7 +197,7 @@ public class Trail {
             Vector3f topOffset = new Vector3f(0, (width / 2f), 0);
             Vector3f bottomOffset = new Vector3f(0, -(width / 2f), 0);
             if (this.billboard) {
-                Vec3 a = Minecraft.getInstance().gameRenderer.getMainCamera().getPosition().subtract(lerpedPoints.get(i)).normalize();
+                Vec3 a = cameraPosition.subtract(lerpedPoints.get(i)).normalize();
                 Vector3f cameraDirection = new Vector3f((float) a.x, (float) a.y, (float) a.z);
                 Vec3 b = lerpedPoints.get(Math.min(i + this.frequency, lerpedPoints.size() - 1)).subtract(lerpedPoints.get(i)).normalize();
                 Vector3f dirToNextPoint = new Vector3f((float) b.x(), (float) b.y(), (float) b.z());

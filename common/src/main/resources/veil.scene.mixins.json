@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "foundry.veil.mixin.scene.client",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "NativeFeatureDispatcherInvoker",
+    "NativeFeatureLightmapMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -10,7 +10,7 @@ import java.lang.Math;
 public class Cylinder implements EmitterShape {
 
     @Override
-    public Vector3d getPoint(RandomSource randomSource, Vector3fc dimensions, Vector3fc shapeRotation, Vector3dc position, boolean fromSurface) {
+    public Vector3d getPoint(RandomSource randomSource, Vector3fc dimensions, Vector3fc rotation, Vector3dc position, boolean fromSurface) {
         double theta = randomSource.nextDouble() * 2 * Math.PI;
         double x = Math.cos(theta);
         double y = randomSource.nextDouble() * 2 - 1;
@@ -27,7 +27,7 @@ public class Cylinder implements EmitterShape {
             );
         }
         Vector3d pos = normal.mul(dim);
-        pos = pos.rotate(new Quaterniond().rotationXYZ((float) Math.toRadians(shapeRotation.x()), (float) Math.toRadians(shapeRotation.y()), (float) Math.toRadians(shapeRotation.z())));
+        pos = pos.rotate(new Quaterniond().rotationXYZ((float) Math.toRadians(rotation.x()), (float) Math.toRadians(rotation.y()), (float) Math.toRadians(rotation.z())));
         pos.mul(0.5);
         return pos.add(position);
     }
@@ -36,7 +36,7 @@ public class Cylinder implements EmitterShape {
     public void renderShape(PoseStack stack, VertexConsumer consumer, Vector3fc dimensions, Vector3fc rotation) {
         stack.pushPose();
 
-        stack.mulPose(new Quaternionf().rotationXYZ((float) Math.toRadians(rotation.x()), (float) Math.toRadians(rotation.y()), (float) Math.toRadians(rotation.z())));
+        stack.rotate(new Quaternionf().rotationXYZ((float) Math.toRadians(rotation.x()), (float) Math.toRadians(rotation.y()), (float) Math.toRadians(rotation.z())));
         stack.scale(dimensions.x(), dimensions.y(), dimensions.z());
 
         float radius = 0.5f;
@@ -49,7 +49,7 @@ public class Cylinder implements EmitterShape {
             for (int i = 0; i < 32; i++) {
                 float x1 = (float) (x + Math.cos(Math.toRadians(angle)) * radius);
                 float z1 = (float) (z + Math.sin(Math.toRadians(angle)) * radius);
-                consumer.addVertex(stack.last().pose(), x1, y, z1).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0);
+                consumer.addVertex(stack.last().pose(), x1, y, z1).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0).setLineWidth(1);
                 angle += angleStep;
             }
         }
@@ -57,8 +57,8 @@ public class Cylinder implements EmitterShape {
         for (int i = 0; i < 32; i++) {
             float x1 = (float) (x + Math.cos(Math.toRadians(angle)) * radius);
             float z1 = (float) (z + Math.sin(Math.toRadians(angle)) * radius);
-            consumer.addVertex(stack.last().pose(), x1,  0.5f, z1).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0);
-            consumer.addVertex(stack.last().pose(), x1, -0.5f, z1).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0);
+            consumer.addVertex(stack.last().pose(), x1,  0.5f, z1).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0).setLineWidth(1);
+            consumer.addVertex(stack.last().pose(), x1, -0.5f, z1).setColor(0.15f, 0.15f, 1, 1).setNormal(0, 1, 0).setLineWidth(1);
             angle += angleStep;
         }
 

@@ -1,15 +1,15 @@
 package foundry.veil.api.client.property;
 
 import com.google.common.base.Suppliers;
-import com.mojang.blaze3d.shaders.Uniform;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import foundry.veil.api.client.registry.PropertyRegistry;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
+import foundry.veil.api.client.render.gpu.GpuUniformBuffer;
 import foundry.veil.api.flare.modifier.PropertyModifier;
 import gg.moonflower.molangcompiler.api.MolangEnvironment;
 import gg.moonflower.molangcompiler.api.MolangExpression;
 import gg.moonflower.molangcompiler.api.MolangRuntime;
-import net.minecraft.client.renderer.ShaderInstance;
 
 import java.util.List;
 import java.util.Optional;
@@ -43,7 +43,38 @@ public abstract class Property<T> {
     protected void setQueries(MolangRuntime.Builder builder) {
     }
 
-    public abstract void applyValue(String name, ShaderInstance shader);
+    /**
+     * Writes the current value into a caller-created native uniform block, or
+     * binds a texture on the program for sampler properties. Apply properties
+     * before {@link GpuShaderProgram#prepare} and before opening the render pass.
+     * The block layout and the shader's std140 declaration must agree.
+     *
+     * @param name the uniform field or sampler binding name
+     * @param shader the native program that owns the bindings
+     * @param block the uniform block binding name; unused by sampler properties
+     */
+    public abstract void applyValue(String name, GpuShaderProgram shader, String block);
+
+    /** Finds a writable field while retaining the optional-uniform behavior of properties. */
+    protected static GpuUniformBuffer uniform(String name, GpuShaderProgram shader, String block,
+                                            GpuUniformBuffer.ValueType type) {
+        if (!shader.hasUniform(block)) {
+            return null;
+        }
+        GpuUniformBuffer buffer = shader.getUniformBlock(block);
+        if (buffer == null) {
+            throw new IllegalStateException("Create an owned uniform block before applying properties: " + block);
+        }
+        GpuUniformBuffer.Field field = buffer.layout().fields().get(name);
+        if (field == null) {
+            return null;
+        }
+        if (field.type() != type || field.arrayLength() != 0) {
+            throw new IllegalArgumentException("Property " + name + " requires a " + type.glsl()
+                    + " field in uniform block " + block);
+        }
+        return buffer;
+    }
 
     public abstract void modify(T value, PropertyModifier.PropertyModifierMode mode, Optional<List<MolangExpression>> optionalMolang);
 

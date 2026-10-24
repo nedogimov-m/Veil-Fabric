@@ -1,9 +1,9 @@
 package foundry.veil.api.client.property;
 
 import foundry.veil.api.client.registry.PropertyRegistry;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
 import foundry.veil.api.flare.modifier.PropertyModifier;
 import gg.moonflower.molangcompiler.api.MolangExpression;
-import net.minecraft.client.renderer.ShaderInstance;
 import org.jetbrains.annotations.Contract;
 
 import java.util.List;
@@ -44,11 +44,14 @@ public abstract class InvertibleProperty<T> extends Property<T> {
 
     public abstract void modifyPreInvert(T value, PropertyModifier.PropertyModifierMode mode, Optional<List<MolangExpression>> optionalMolang);
 
-    public void applyInverseValue(String name, ShaderInstance shader) {
+    public void applyInverseValue(String name, GpuShaderProgram shader, String block) {
         T originalOverrideValue = this.overrideValue;
         this.overrideValue = this.overrideInverseValue;
-        this.applyValue("I" + name, shader);
-        this.overrideValue = originalOverrideValue;
+        try {
+            this.applyValue("I" + name, shader, block);
+        } finally {
+            this.overrideValue = originalOverrideValue;
+        }
     }
 
     @Override

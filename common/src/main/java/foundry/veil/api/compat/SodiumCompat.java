@@ -1,66 +1,32 @@
 package foundry.veil.api.compat;
 
-import foundry.veil.Veil;
-import it.unimi.dsi.fastutil.objects.Object2IntMap;
-import net.minecraft.resources.ResourceLocation;
-import org.jetbrains.annotations.ApiStatus;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import foundry.veil.platform.VeilPlatform;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.concurrent.CompletableFuture;
 
-/**
- * Veil sodium compat implementation.
- *
- * @author Ocelot
- */
+/** Typed native Sodium integration. Dynamic attachment masks belong to the native world bridge. */
 public interface SodiumCompat {
-
-    /**
-     * Retrieves the compat instance. This will be <code>null</code> if sodium is not installed.
-     */
-    @Nullable
-    SodiumCompat INSTANCE = Veil.platform().isModLoaded("sodium") ? ServiceLoader.load(SodiumCompat.class).findFirst().orElse(null) : null;
-
-    /**
-     * @return Whether Sodium is loaded
-     */
-    static boolean isLoaded() {
-        return INSTANCE != null;
+    @Nullable SodiumCompat INSTANCE = load();
+    private static @Nullable SodiumCompat load() {
+        boolean installed=ServiceLoader.load(VeilPlatform.class).findFirst().map(platform->platform.isModLoaded("sodium")).orElse(false);
+        return installed?ServiceLoader.load(SodiumCompat.class).findFirst().orElse(null):null;
     }
-
-    /**
-     * @return A map of all shader IDs loaded by sodium
-     */
-    Object2IntMap<ResourceLocation> getLoadedShaders();
-
-    /**
-     * Recompiles all shaders from source.
-     */
-    @ApiStatus.Experimental
-    void recompile();
-
-    /**
-     * Sets the current shader active buffers. Will recompile/cache shaders as needed.
-     *
-     * @param activeBuffers The new active buffer flags
-     */
-    @ApiStatus.Internal
-    void setActiveBuffers(int activeBuffers);
-
-    /**
-     * Marks all chunks in the view dirty.
-     */
+    static boolean isLoaded() { return INSTANCE != null; }
+    /** Actual immutable native definitions already created by Sodium; observation never compiles a selection. */
+    Map<Identifier, RenderPipeline> getPipelines();
+    /** Actual resource reload, including Sodium includes and the native Minecraft pipeline cache. */
+    CompletableFuture<Void> recompile();
     void markChunksDirty();
-
-    @ApiStatus.Internal
-    Object getSortedRenderLists();
-
-    @ApiStatus.Internal
-    void setSortedRenderLists(@Nullable Object sortedRenderLists);
-
-    @ApiStatus.Internal
-    Object getTaskLists();
-
-    @ApiStatus.Internal
-    void setTaskList(@Nullable Object taskList);
+    /** Opaque identities of Sodium's real SortedRenderLists and DeferredTaskList, never fabricated legacy queue maps. */
+    @Nullable Object getSortedRenderLists();
+    void setSortedRenderLists(@Nullable Object lists);
+    @Nullable Object getTaskLists();
+    void setTaskList(@Nullable Object tasks);
+    /** Restore list references to their original native owner, unless a real level reload replaced that owner. */
+    AutoCloseable preserveVisibility();
 }

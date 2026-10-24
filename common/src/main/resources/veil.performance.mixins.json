@@ -2,16 +2,10 @@
   "required": true,
   "minVersion": "0.8",
   "package": "foundry.veil.mixin.performance",
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_25",
   "plugin": "foundry.veil.VeilMixinPluginImpl",
-  "client": [
-    "client.PerformanceAbstractTextureMixin",
-    "client.PerformanceLevelRendererMixin",
-    "client.PerformanceRenderTargetMixin",
-    "client.PerformanceScreenEffectRendererMixin"
-  ],
+  "client": [],
   "injectors": {
     "defaultRequire": 1
   }
 }
-  

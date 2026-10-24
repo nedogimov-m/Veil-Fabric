@@ -3,18 +3,22 @@ package foundry.veil.api.quasar.particle;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.MeshData;
-import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
 import com.mojang.serialization.Codec;
 import foundry.veil.api.client.render.VeilRenderSystem;
 import foundry.veil.api.client.render.rendertype.VeilRenderType;
 import foundry.veil.api.client.render.vertex.VeilVertexFormat;
 import foundry.veil.api.client.render.vertex.VertexArray;
-import foundry.veil.api.client.render.vertex.VertexArrayBuilder;
+import foundry.veil.api.client.render.gpu.NativeParticlePass;
+import foundry.veil.impl.quasar.QuasarParticleHandler;
+import com.mojang.blaze3d.vertex.ByteBufferBuilder;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import org.lwjgl.system.MemoryUtil;
 import foundry.veil.api.quasar.registry.RenderStyleRegistry;
 import foundry.veil.api.util.CodecUtil;
-import net.minecraft.client.Camera;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.ApiStatus;
@@ -26,8 +30,6 @@ import java.lang.Math;
 import java.nio.ByteBuffer;
 import java.util.List;
 
-import static org.lwjgl.opengl.GL15C.*;
-import static org.lwjgl.system.MemoryUtil.memAddress;
 
 /**
  * Defines how a particle emitter renders a set of particles.
@@ -39,7 +41,7 @@ public abstract class RenderStyle implements NativeResource {
     public static final Codec<RenderStyle> CODEC = CodecUtil.registryOrLegacyCodec(RenderStyleRegistry.REGISTRY);
 
     protected VertexArray vertexArray;
-    protected int instanceVBO;
+    protected ByteBufferBuilder meshStorage;
     protected final int bufferSize;
     protected int maxParticles;
 
@@ -60,13 +62,14 @@ public abstract class RenderStyle implements NativeResource {
             return;
         }
 
+        if(this.vertexArray != null)this.vertexArray.close();
         this.vertexArray = VertexArray.create();
-        this.vertexArray.upload(this.createMesh(), VertexArray.DrawUsage.STATIC);
-        this.instanceVBO = this.vertexArray.getOrCreateBuffer(2);
-
-        VertexArrayBuilder builder = this.vertexArray.editFormat();
-        builder.defineVertexBuffer(VertexArray.INSTANCE_BUFFER, this.instanceVBO, 0, this.bufferSize, 1);
-        this.setupBufferState(builder);
+        try(var storage=new ByteBufferBuilder(1024)) {
+            this.meshStorage=storage;
+            var encoder=RenderSystem.getDevice().createCommandEncoder();
+            this.vertexArray.upload(encoder,this.createMesh(),VertexArray.DrawUsage.STATIC);encoder.submit();
+        } catch(RuntimeException|Error failure){this.vertexArray.close();this.vertexArray=null;throw failure;}
+        finally{this.meshStorage=null;}
     }
 
     /**
@@ -95,7 +98,7 @@ public abstract class RenderStyle implements NativeResource {
      * @param camera    The camera to use to render the particles
      * @since 4.4.0
      */
-    public void render(List<QuasarParticle> particles, Camera camera) {
+    public void render(List<QuasarParticle> particles, CameraRenderState camera) {
         if (particles.isEmpty()) {
             return;
         }
@@ -105,48 +108,17 @@ public abstract class RenderStyle implements NativeResource {
             return;
         }
 
-        // Perform frustum culling for each particle
-        List<QuasarParticle> visibleParticles = particles.stream().filter(particle -> VeilRenderSystem.getCullingFrustum().testSphere(particle.getPosition(), particle.getRenderData().getRenderRadius())).toList();
-        if (visibleParticles.isEmpty()) {
-            return;
-        }
-
-        RenderSystem.glBindBuffer(GL_ARRAY_BUFFER, this.instanceVBO);
-
-        if (visibleParticles.size() > this.maxParticles) {
-            if (this.maxParticles < 100) {
-                this.maxParticles = 100;
-            } else {
-                this.maxParticles = (int) Math.max(Math.ceil(this.maxParticles / 2.0), visibleParticles.size() * 1.5);
-            }
-            glBufferData(GL_ARRAY_BUFFER, (long) this.maxParticles * this.bufferSize, GL_STATIC_DRAW);
-        }
-
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            int pointer = 0;
-            long offset = 0;
-            ByteBuffer dataBuffer = stack.malloc(Math.min(MIN_PARTICLES, visibleParticles.size()) * this.bufferSize);
-            for (QuasarParticle particle : visibleParticles) {
-                dataBuffer.position((pointer++) * this.bufferSize);
-
-                this.putBufferData(particle, camera, dataBuffer);
-
-                if (pointer >= MIN_PARTICLES) {
-                    dataBuffer.rewind();
-                    glBufferSubData(GL_ARRAY_BUFFER, offset, dataBuffer);
-                    offset += dataBuffer.capacity();
-                    pointer = 0;
-                }
-            }
-
-            if (pointer > 0) {
-                dataBuffer.rewind();
-                nglBufferSubData(GL_ARRAY_BUFFER, offset, (long) pointer * this.bufferSize, memAddress(dataBuffer));
-            }
-        }
-
-        this.vertexArray.bind();
-        this.vertexArray.drawInstancedWithRenderType(renderType, visibleParticles.size());
+        List<QuasarParticle> visibleParticles=particles.stream().filter(particle->camera.cullFrustum.isVisible(
+                new net.minecraft.world.phys.AABB(particle.getPosition().x-particle.getRenderData().getRenderRadius(),particle.getPosition().y-particle.getRenderData().getRenderRadius(),particle.getPosition().z-particle.getRenderData().getRenderRadius(),
+                        particle.getPosition().x+particle.getRenderData().getRenderRadius(),particle.getPosition().y+particle.getRenderData().getRenderRadius(),particle.getPosition().z+particle.getRenderData().getRenderRadius()))).toList();
+        if(visibleParticles.isEmpty())return;
+        if(this.vertexArray==null)this.init();
+        if(this.bufferSize!=NativeParticlePass.INSTANCES.getVertexSize())throw new IllegalStateException("RenderStyle requires a migrated native instance layout");
+        var bytes=MemoryUtil.memAlloc(Math.multiplyExact(visibleParticles.size(),this.bufferSize));
+        try {
+            for(var particle:visibleParticles){int start=bytes.position();this.putBufferData(particle,camera,bytes);if(bytes.position()!=start+this.bufferSize)throw new IllegalStateException("Incorrect particle instance stride");}
+            bytes.flip();QuasarParticleHandler.queue(renderType,this.vertexArray,bytes,visibleParticles.size(),camera);
+        } finally{MemoryUtil.memFree(bytes);}
     }
 
     /**
@@ -172,7 +144,7 @@ public abstract class RenderStyle implements NativeResource {
 
     @Override
     public void free() {
-        this.vertexArray.free();
+        if(this.vertexArray!=null){this.vertexArray.close();this.vertexArray=null;}
     }
 
     /**
@@ -182,14 +154,6 @@ public abstract class RenderStyle implements NativeResource {
     protected abstract MeshData createMesh();
 
     /**
-     * Set up the vertex attribute arrays to use for each particle.
-     *
-     * @param builder The builder associated with the VertexArray
-     * @since 4.4.0
-     */
-    protected abstract void setupBufferState(VertexArrayBuilder builder);
-
-    /**
      * Put information about each particle into the vertex attribute array.
      *
      * @param particle The particle being loaded
@@ -197,7 +161,7 @@ public abstract class RenderStyle implements NativeResource {
      * @param buffer   The buffer of the current VertexArray
      * @since 4.4.0
      */
-    protected abstract void putBufferData(QuasarParticle particle, Camera camera, ByteBuffer buffer);
+    protected abstract void putBufferData(QuasarParticle particle, CameraRenderState camera, ByteBuffer buffer);
 
     @ApiStatus.Internal
     public static final class Cube extends RenderStyle {
@@ -228,7 +192,7 @@ public abstract class RenderStyle implements NativeResource {
 
         @Override
         protected MeshData createMesh() {
-            BufferBuilder builder = RenderSystem.renderThreadTesselator().begin(VertexFormat.Mode.QUADS, VeilVertexFormat.QUASAR_PARTICLE);
+            BufferBuilder builder = new BufferBuilder(this.meshStorage, PrimitiveTopology.QUADS, VeilVertexFormat.QUASAR_PARTICLE);
 
             for (int i = 0; i < 6; i++) {
                 for (int j = 0; j < 4; j++) {
@@ -243,40 +207,13 @@ public abstract class RenderStyle implements NativeResource {
         }
 
         @Override
-        protected void setupBufferState(VertexArrayBuilder builder) {
-            builder.setVertexAttribute(2, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, 0); // Model Matrix[0]
-            builder.setVertexAttribute(3, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 4); // Model Matrix[1]
-            builder.setVertexAttribute(4, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 8); // Model Matrix[2]
-            builder.setVertexAttribute(5, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 12); // Model Matrix[3]
-            builder.setVertexAttribute(6, 2, 1, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 16); // Scale
-            builder.setVertexAttribute(7, 2, 2, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 17); // UV0 min
-            builder.setVertexAttribute(8, 2, 2, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 19); // UV0 max
-            builder.setVertexAttribute(9, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 21); // Color
-            builder.setVertexIAttribute(10, 2, 2, VertexArrayBuilder.DataType.SHORT, Float.BYTES * 25); // UV2 / Light
-        }
-
-        @Override
-        protected void putBufferData(QuasarParticle particle, Camera camera, ByteBuffer buffer) {
+        protected void putBufferData(QuasarParticle particle, CameraRenderState camera, ByteBuffer buffer) {
             RenderData renderData = particle.getRenderData();
             Vector3fc rotation = renderData.getRenderRotation();
             SpriteData spriteData = renderData.getSpriteData();
 
-            Vec3 projectedView = camera.getPosition();
-            Vector3f renderOffset = new Vector3f();
-            Vector3dc renderPosition = renderData.getRenderPosition();
-            renderOffset.set(
-                    (float) (renderPosition.x() - projectedView.x),
-                    (float) (renderPosition.y() - projectedView.y),
-                    (float) (renderPosition.z() - projectedView.z));
-
-            Matrix4f transformationMatrix = new Matrix4f()
-                    .translate(renderOffset.x, renderOffset.y, renderOffset.z)
-                    .rotate(new Quaternionf().rotationXYZ(rotation.x(), rotation.y(), rotation.z()));
-            transformationMatrix.get(buffer.position(), buffer);
-
-            buffer.position(buffer.position() + Float.BYTES * 16);
-
-            buffer.putFloat(renderData.getRenderRadius());
+            Vector3dc position=renderData.getRenderPosition();
+            Matrix4f transformationMatrix=NativeParticlePass.transform(position.x(),position.y(),position.z(),camera.pos.x,camera.pos.y,camera.pos.z,rotation,null);
 
             float uMin = 0;
             float vMin = 0;
@@ -288,19 +225,9 @@ public abstract class RenderStyle implements NativeResource {
                 vMin = spriteData.v(renderData.getRenderAge(), renderData.getAgePercent(), vMin);
                 vMax = spriteData.v(renderData.getRenderAge(), renderData.getAgePercent(), vMax);
             }
-            buffer.putFloat(uMin);
-            buffer.putFloat(vMin);
-            buffer.putFloat(uMax);
-            buffer.putFloat(vMax);
-
-            buffer.putFloat(renderData.getRed());
-            buffer.putFloat(renderData.getGreen());
-            buffer.putFloat(renderData.getBlue());
-            buffer.putFloat(renderData.getAlpha());
-
-            int packedLight = renderData.getPackedLight();
-            buffer.putShort((short) ((packedLight & 65535)));
-            buffer.putShort((short) ((packedLight >> 16 & 65535)));
+            if(renderData.getAtlasSprite()!=null){var sprite=renderData.getAtlasSprite();uMin=sprite.getU0();vMin=sprite.getV0();uMax=sprite.getU1();vMax=sprite.getV1();}
+            NativeParticlePass.writeInstance(buffer,transformationMatrix,renderData.getRenderRadius(),uMin,vMin,uMax,vMax,
+                    renderData.getRed(),renderData.getGreen(),renderData.getBlue(),renderData.getAlpha(),renderData.getPackedLight());
         }
     }
 
@@ -318,7 +245,7 @@ public abstract class RenderStyle implements NativeResource {
 
         @Override
         protected MeshData createMesh() {
-            BufferBuilder builder = RenderSystem.renderThreadTesselator().begin(VertexFormat.Mode.QUADS, VeilVertexFormat.QUASAR_PARTICLE);
+            BufferBuilder builder = new BufferBuilder(this.meshStorage, PrimitiveTopology.QUADS, VeilVertexFormat.QUASAR_PARTICLE);
 
             for (int j = 0; j < 4; j++) {
                 Vector3fc pos = PLANE_POSITIONS[j];
@@ -331,41 +258,14 @@ public abstract class RenderStyle implements NativeResource {
         }
 
         @Override
-        protected void setupBufferState(VertexArrayBuilder builder) {
-            builder.setVertexAttribute(2, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, 0); // Model Matrix[0]
-            builder.setVertexAttribute(3, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 4); // Model Matrix[1]
-            builder.setVertexAttribute(4, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 8); // Model Matrix[2]
-            builder.setVertexAttribute(5, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 12); // Model Matrix[3]
-            builder.setVertexAttribute(6, 2, 1, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 16); // Scale
-            builder.setVertexAttribute(7, 2, 2, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 17); // UV0 min
-            builder.setVertexAttribute(8, 2, 2, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 19); // UV0 max
-            builder.setVertexAttribute(9, 2, 4, VertexArrayBuilder.DataType.FLOAT, false, Float.BYTES * 21); // Color
-            builder.setVertexIAttribute(10, 2, 2, VertexArrayBuilder.DataType.SHORT, Float.BYTES * 25); // UV2 / Light
-        }
-
-        @Override
-        protected void putBufferData(QuasarParticle particle, Camera camera, ByteBuffer buffer) {
+        protected void putBufferData(QuasarParticle particle, CameraRenderState camera, ByteBuffer buffer) {
             RenderData renderData = particle.getRenderData();
-            Quaternionf faceCameraRotation = Minecraft.getInstance().getEntityRenderDispatcher().cameraOrientation().get(new Quaternionf());
+            Quaternionf faceCameraRotation = new Quaternionf(camera.orientation);
             Vector3fc rotation = renderData.getRenderRotation();
             SpriteData spriteData = renderData.getSpriteData();
 
-            Vec3 projectedView = camera.getPosition();
-            Vector3f renderOffset = new Vector3f();
-            Vector3dc renderPosition = renderData.getRenderPosition();
-            renderOffset.set(
-                    (float) (renderPosition.x() - projectedView.x),
-                    (float) (renderPosition.y() - projectedView.y),
-                    (float) (renderPosition.z() - projectedView.z));
-
-            Matrix4f transformationMatrix = new Matrix4f()
-                    .translate(renderOffset.x, renderOffset.y, renderOffset.z)
-                    .rotate(faceCameraRotation.rotateXYZ(rotation.x(), rotation.y(), rotation.z()));
-            transformationMatrix.get(buffer.position(), buffer);
-
-            buffer.position(buffer.position() + Float.BYTES * 16);
-
-            buffer.putFloat(renderData.getRenderRadius());
+            Vector3dc position=renderData.getRenderPosition();
+            Matrix4f transformationMatrix=NativeParticlePass.transform(position.x(),position.y(),position.z(),camera.pos.x,camera.pos.y,camera.pos.z,rotation,faceCameraRotation);
 
             float uMin = 0;
             float vMin = 0;
@@ -377,19 +277,9 @@ public abstract class RenderStyle implements NativeResource {
                 vMin = spriteData.v(renderData.getRenderAge(), renderData.getAgePercent(), vMin);
                 vMax = spriteData.v(renderData.getRenderAge(), renderData.getAgePercent(), vMax);
             }
-            buffer.putFloat(uMin);
-            buffer.putFloat(vMin);
-            buffer.putFloat(uMax);
-            buffer.putFloat(vMax);
-
-            buffer.putFloat(renderData.getRed());
-            buffer.putFloat(renderData.getGreen());
-            buffer.putFloat(renderData.getBlue());
-            buffer.putFloat(renderData.getAlpha());
-
-            int packedLight = renderData.getPackedLight();
-            buffer.putShort((short) ((packedLight & 65535)));
-            buffer.putShort((short) ((packedLight >> 16 & 65535)));
+            if(renderData.getAtlasSprite()!=null){var sprite=renderData.getAtlasSprite();uMin=sprite.getU0();vMin=sprite.getV0();uMax=sprite.getU1();vMax=sprite.getV1();}
+            NativeParticlePass.writeInstance(buffer,transformationMatrix,renderData.getRenderRadius(),uMin,vMin,uMax,vMax,
+                    renderData.getRed(),renderData.getGreen(),renderData.getBlue(),renderData.getAlpha(),renderData.getPackedLight());
         }
     }
 }

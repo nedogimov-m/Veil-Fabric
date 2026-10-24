@@ -14,7 +14,7 @@ import foundry.veil.api.flare.modifier.PropertyModifier;
 import foundry.veil.api.util.CodecUtil;
 import it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collections;
@@ -57,7 +57,9 @@ public final class FlareEffectLayer {
         Map<String, List<PropertyModifier<?>>> modifierMap = new HashMap<>();
 
         for (FlareMaterial material : model.getMaterials()) {
-            this.putModelProperties(material.properties());
+            Map<String, Property<?>> modelProperties = new HashMap<>();
+            this.putModelProperties(modelProperties);
+            material.addProperties(modelProperties);
         }
 
         for (PropertyModifier<?> modifier : modifiers) {
@@ -81,7 +83,7 @@ public final class FlareEffectLayer {
         materialProperties.put("_Time", TimeProperty.INSTANCE);
     }
 
-    public void render(EffectHost host, MatrixStack matrixStack, float partialTick, @Nullable Map<ResourceLocation, BakedShell> shellOverrides) {
+    public void render(EffectHost host, MatrixStack matrixStack, float partialTick, @Nullable Map<Identifier, BakedShell> shellOverrides) {
         ControllerManager controllerManager = FlareEffectManager.getInstance().getControllerManager();
 
         for (PropertyModifier<?> modifier : this.originalModifiers) {
@@ -92,12 +94,13 @@ public final class FlareEffectLayer {
         PropertyModifier.modifyProperty(host, null, this.model.rotationOffset, this.rotationModifier);
         PropertyModifier.modifyProperty(host, null, this.model.scaleOffset, this.scaleModifier);
 
-        this.model.render(host, matrixStack, this.modifiers, shellOverrides);
-
-        this.model.positionOffset.resetOverrideValue();
-        this.model.rotationOffset.resetOverrideValue();
-        this.model.scaleOffset.resetOverrideValue();
-        this.model.modelToWorld.resetOverrideValue();
+        try { this.model.render(host, matrixStack, this.modifiers, shellOverrides); }
+        finally {
+            this.model.positionOffset.resetOverrideValue();
+            this.model.rotationOffset.resetOverrideValue();
+            this.model.scaleOffset.resetOverrideValue();
+            this.model.modelToWorld.resetOverrideValue();
+        }
     }
 
     public String getName() {

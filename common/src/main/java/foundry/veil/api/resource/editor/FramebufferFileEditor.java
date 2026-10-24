@@ -9,7 +9,9 @@ import com.mojang.serialization.JsonOps;
 import foundry.veil.Veil;
 import foundry.veil.api.client.imgui.VeilImGuiUtil;
 import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.framebuffer.AdvancedFbo;
+import foundry.veil.api.client.render.gpu.GpuFramebuffer;
+import foundry.veil.api.client.util.NativeTexturePreview;
+import foundry.imgui.api.ImGuiMC;
 import foundry.veil.api.client.render.framebuffer.FramebufferAttachmentDefinition;
 import foundry.veil.api.client.render.framebuffer.FramebufferDefinition;
 import foundry.veil.api.client.render.framebuffer.FramebufferManager;
@@ -28,7 +30,7 @@ import imgui.type.ImBoolean;
 import imgui.type.ImInt;
 import imgui.type.ImString;
 import net.minecraft.client.Minecraft;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
@@ -49,6 +51,7 @@ public class FramebufferFileEditor implements ResourceFileEditor<FramebufferReso
             .setQuery("screen_height", MolangExpression.of(() -> (float) Minecraft.getInstance().getWindow().getHeight()))
             .create();
 
+    private NativeTexturePreview preview;
     private final ImBoolean open;
     private final VeilResourceManager resourceManager;
     private final FramebufferResource resource;
@@ -108,22 +111,16 @@ public class FramebufferFileEditor implements ResourceFileEditor<FramebufferReso
             ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, 0, 0);
             if (ImGui.beginChild("##size", boxWidth, boxHeight, true)) {
                 FramebufferManager framebufferManager = VeilRenderSystem.renderer().getFramebufferManager();
-                ResourceLocation id = FramebufferManager.FRAMEBUFFER_LISTER.fileToId(this.resource.resourceInfo().location());
-                AdvancedFbo fbo = framebufferManager.getFramebuffer(id);
-
-                if (fbo != null) {
-                    int textureId = 0;
-                    if (this.attachmentIndex == 0) {
-                        if (fbo.isDepthTextureAttachment()) {
-                            textureId = fbo.getDepthTextureAttachment().getId();
-                        }
-                    } else {
-                        if (fbo.isColorTextureAttachment(this.attachmentIndex - 1)) {
-                            textureId = fbo.getColorTextureAttachment(this.attachmentIndex - 1).getId();
-                        }
-                    }
-                    if (textureId > 0) {
-                        ImGui.image(textureId, boxWidth, boxHeight, 0, 1, 1, 0);
+                Identifier id = FramebufferManager.FRAMEBUFFER_LISTER.fileToId(this.resource.resourceInfo().location());
+                GpuFramebuffer fbo=framebufferManager.getFramebuffer(id);
+                if(fbo!=null&&!fbo.isClosed()){
+                    com.mojang.renderpearl.api.textures.GpuTextureView attachment=null;
+                    if(this.attachmentIndex==0){if(fbo.hasDepth())attachment=fbo.depth().view();}
+                    else if(this.attachmentIndex-1<fbo.colorCount())attachment=fbo.color(this.attachmentIndex-1).view();
+                    if(attachment!=null){
+                        if(preview==null)preview=new NativeTexturePreview(com.mojang.blaze3d.systems.RenderSystem.getDevice());
+                        var view=preview.render(attachment,NativeTexturePreview.Projection.TEXTURE_2D,0,0);
+                        ImGuiMC.image(ImGuiMC.getTexture(view),boxWidth,boxHeight,0,1,1,0);
                     }
                 }
             }
@@ -246,6 +243,8 @@ public class FramebufferFileEditor implements ResourceFileEditor<FramebufferReso
         return !this.open.get();
     }
 
+    @Override public void close(){if(preview!=null){final var previous=preview;preview=null;ImGuiMC.afterDraw(previous::close);}}
+
     @Override
     public FramebufferResource getResource() {
         return this.resource;
@@ -295,41 +294,18 @@ public class FramebufferFileEditor implements ResourceFileEditor<FramebufferReso
         BUILDER.setLength(0);
     }
 
-    // TODO re-implement this when fonts can be accessed again
     private static void drawVerticalText(String next) {
-//        ImFont font = ImGui.getFont();
-//        float pad = ImGui.getStyle().getFramePaddingX();
-//        float posX = ImGui.getCursorScreenPosX() + pad;
-//        float posY = ImGui.getCursorScreenPosY() + pad;
-//
-//        ImDrawList drawList = ImGui.getWindowDrawList();
-//        int length = next.length();
-//        drawList.primReserve(6 * length, 4 * length);
-//        for (int i = 0; i < length; i++) {
-//            int codePoint = next.codePointAt(i);
-//            ImFontGlyph glyph = font.findGlyph(codePoint);
-//
-//            posY -= font.getCharAdvance(codePoint);
-//            drawList.primQuadUV(
-//                    (int) (posX + glyph.getY1()),
-//                    (int) (posY + glyph.getX0()),
-//                    (int) (posX + glyph.getY1()),
-//                    (int) (posY + glyph.getX1()),
-//                    (int) (posX + glyph.getY0()),
-//                    (int) (posY + glyph.getX1()),
-//                    (int) (posX + glyph.getY0()),
-//                    (int) (posY + glyph.getX0()),
-//
-//                    glyph.getU1(),
-//                    glyph.getV1(),
-//                    glyph.getU0(),
-//                    glyph.getV1(),
-//                    glyph.getU0(),
-//                    glyph.getV0(),
-//                    glyph.getU1(),
-//                    glyph.getV0(),
-//                    -1);
-//        }
+        ImFont font = ImGui.getFont();
+        float pad = ImGui.getStyle().getFramePaddingX();
+        float posX = ImGui.getCursorScreenPosX() + pad;
+        float posY = ImGui.getCursorScreenPosY() + pad;
+
+        ImDrawList drawList=ImGui.getWindowDrawList();
+        // Current ImGui owns dynamic glyph metadata; draw the vertical label through its text API.
+        for(int index=0;index<next.length();){
+            int codePoint=next.codePointAt(index);String glyph=new String(Character.toChars(codePoint));index+=Character.charCount(codePoint);
+            posY-=ImGui.getTextLineHeight();drawList.addText(posX,posY,ImGui.getColorU32(ImGuiCol.Text),glyph);
+        }
     }
 
     private void renderFramebufferSettings() {
@@ -392,8 +368,8 @@ public class FramebufferFileEditor implements ResourceFileEditor<FramebufferReso
             ImGui.endCombo();
         }
         ImGui.endDisabled();
-        if (ImGui.sliderInt(this.type == FramebufferAttachmentDefinition.Type.RENDER_BUFFER ? "Samples" : "Mipmaps", this.levelsInput.getData(), 1, VeilRenderSystem.maxSamples())) {
-            this.levels = this.levelsInput.get();
+        if (ImGui.inputInt(this.type == FramebufferAttachmentDefinition.Type.RENDER_BUFFER ? "Samples" : "Mipmaps", this.levelsInput)) {
+            this.levels = Math.max(1,this.levelsInput.get());
             this.saveAttachment();
         }
         if (ImGui.inputText("Name", this.name, ImGuiInputTextFlags.EnterReturnsTrue)) {

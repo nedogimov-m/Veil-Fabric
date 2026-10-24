@@ -1,324 +1,76 @@
 package foundry.veil.impl.client.necromancer.render;
 
-import com.mojang.blaze3d.platform.GlStateManager;
-import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.ByteBufferBuilder;
-import com.mojang.blaze3d.vertex.MeshData;
-import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.blaze3d.vertex.PoseStack;
 import foundry.veil.api.client.necromancer.Skeleton;
 import foundry.veil.api.client.necromancer.render.NecromancerRenderer;
 import foundry.veil.api.client.necromancer.render.Skin;
-import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.profiler.VeilRenderProfiler;
-import foundry.veil.api.client.render.rendertype.VeilRenderType;
-import foundry.veil.api.client.render.shader.block.DynamicShaderBlock;
-import foundry.veil.api.client.render.shader.block.ShaderBlock;
-import foundry.veil.api.client.render.vertex.VertexArray;
-import it.unimi.dsi.fastutil.floats.FloatArrayList;
-import it.unimi.dsi.fastutil.floats.FloatList;
-import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
-import it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.RenderType;
-import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.NotNull;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.util.LightCoordsUtil;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
-import org.joml.Matrix4x3f;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-
-import java.nio.ByteBuffer;
+import org.joml.Vector4f;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.ListIterator;
-import java.util.Map;
+import java.util.Objects;
 
-import static org.lwjgl.opengl.ARBDirectStateAccess.glNamedBufferData;
-import static org.lwjgl.opengl.GL15C.*;
-import static org.lwjgl.opengl.GL31C.GL_UNIFORM_BUFFER;
-
-@ApiStatus.Internal
-public class NecromancerRenderDispatcher {
-
-    private static final Batched BATCHED = new Batched();
-    private static final Immediate IMMEDIATE = new Immediate();
-    private static final int BASE_INSTANCES = 100;
-
-    private static DynamicShaderBlock<?> boneBlock;
-    private static int boneBuffer;
-    private static int instancedBuffer;
-    private static ByteBufferBuilder boneBuilder;
-    private static boolean drawing;
-
-    public static void begin() {
-        drawing = true;
-        BATCHED.begin();
+/** Captures bone deformation at extraction and submits only immutable native geometry. */
+public final class NecromancerRenderDispatcher {
+    private static final ThreadLocal<Scope> CURRENT = new ThreadLocal<>();
+    private NecromancerRenderDispatcher() {}
+    public record Draw(RenderType type, Skin.Snapshot geometry) {
+        public Draw { Objects.requireNonNull(type); Objects.requireNonNull(geometry); }
+        public void submit(SubmitNodeCollector collector, PoseStack pose) { this.geometry.submit(collector, pose, this.type); }
     }
-
-    public static void end() {
-        BATCHED.end();
-        drawing = false;
+    /** A separate recorder belongs to one native entity extraction, with no global or GPU state. */
+    public static Recording recording() { return new Recording(); }
+    public static final class Recording extends State {
+        private final List<Draw> draws = new ArrayList<>();
+        @Override protected void accept(Draw draw) { this.draws.add(draw); }
+        public List<Draw> snapshot() { return List.copyOf(this.draws); }
     }
-
-    public static void delete() {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            glDeleteBuffers(stack.ints(boneBuffer, instancedBuffer));
-        }
-        boneBlock = null;
-        boneBuffer = 0;
-        instancedBuffer = 0;
-        if (boneBuilder != null) {
-            boneBuilder.close();
-            boneBuilder = null;
-        }
+    public static Scope begin(SubmitNodeCollector collector) {
+        Scope scope = new Scope(CURRENT.get(), Objects.requireNonNull(collector)); CURRENT.set(scope); return scope;
     }
-
     public static NecromancerRenderer getRenderer() {
-        return drawing ? BATCHED : IMMEDIATE;
+        Scope scope = CURRENT.get();
+        if (scope == null || scope.closed) throw new IllegalStateException("Skeletal rendering requires a native COLLECT_SUBMITS scope or an explicit recording");
+        return scope.renderer;
     }
-
-    private static void updateBlockSize(int skeletonCount, int dataSize) {
-        if (boneBlock == null) {
-            boneBuffer = GlStateManager._glGenBuffers();
-            boneBlock = ShaderBlock.wrapper(ShaderBlock.BufferBinding.UNIFORM, boneBuffer);
+    public static void end() { Scope scope = CURRENT.get(); if (scope == null) throw new IllegalStateException("No native skeletal collection scope"); scope.close(); }
+    public static void delete() { while (CURRENT.get() != null) CURRENT.get().close(); }
+    public static final class Scope implements AutoCloseable {
+        private final Scope previous;
+        private final State renderer;
+        private boolean closed;
+        private Scope(Scope previous, SubmitNodeCollector collector) {
+            this.previous = previous;
+            this.renderer = new State() { @Override protected void accept(Draw draw) {
+                if (Scope.this.closed || CURRENT.get() != Scope.this) throw new IllegalStateException("Native skeletal collection scope is no longer selected");
+                draw.submit(collector, new PoseStack());
+            } };
         }
-
-        if (boneBlock.getSize() < Skeleton.UNIFORM_STRIDE * skeletonCount * dataSize) {
-            int newSize = (int) (skeletonCount * 1.5 * dataSize);
-            boneBlock.setSize(Skeleton.UNIFORM_STRIDE * newSize);
-
-            VeilRenderSystem.renderer().getShaderDefinitions().set("NECROMANCER_BONE_BUFFER_SIZE", Long.toString(newSize));
-            if (VeilRenderSystem.directStateAccessSupported()) {
-                glNamedBufferData(boneBuffer, boneBlock.getSize(), GL_DYNAMIC_DRAW);
-            } else {
-                glBindBuffer(GL_UNIFORM_BUFFER, boneBuffer);
-                glBufferData(GL_UNIFORM_BUFFER, boneBlock.getSize(), GL_DYNAMIC_DRAW);
-                glBindBuffer(GL_UNIFORM_BUFFER, 0);
-            }
-        }
-    }
-
-    private static abstract class RendererImpl implements NecromancerRenderer {
-
-        protected int overlay;
-        protected int light;
-        protected int r;
-        protected int g;
-        protected int b;
-        protected int a;
-        protected final Matrix4f transform = new Matrix4f();
-
-        @Override
-        public void setUv1(int u, int v) {
-            this.overlay = (v & 15) << 4 | u & 15;
-        }
-
-        @Override
-        public void setUv2(int u, int v) {
-            this.light = (v & 15) << 4 | u & 15;
-        }
-
-        @Override
-        public void setColor(float r, float g, float b, float a) {
-            this.r = (int) (r * 255.0) & 0xFF;
-            this.g = (int) (g * 255.0) & 0xFF;
-            this.b = (int) (b * 255.0) & 0xFF;
-            this.a = (int) (a * 255.0) & 0xFF;
-        }
-
-        @Override
-        public void setColor(int color) {
-            this.r = (color >> 16) & 0xFF;
-            this.g = (color >> 8) & 0xFF;
-            this.b = color & 0xFF;
-            this.a = (color >> 24) & 0xFF;
-        }
-
-        @Override
-        public void reset() {
-            this.overlay = 160;
-            this.light = 255;
-            this.r = 255;
-            this.g = 255;
-            this.b = 255;
-            this.a = 255;
-            this.transform.identity();
-        }
-
-        @Override
-        public void setTransform(Matrix4fc transform) {
-            this.transform.set(transform);
+        @Override public void close() {
+            if (this.closed) return;
+            if (CURRENT.get() != this) throw new IllegalStateException("Native skeletal collection scopes must close in stack order");
+            this.closed = true; if (this.previous == null) CURRENT.remove(); else CURRENT.set(this.previous);
         }
     }
-
-    public static class Immediate extends RendererImpl {
-
-        private final Matrix4x3f affineTransform;
-
-        private Immediate() {
-            this.affineTransform = new Matrix4x3f();
-        }
-
-        @Override
-        public void draw(RenderType renderType, Skeleton skeleton, Skin skin, float partialTicks) {
-            VeilRenderProfiler profiler = VeilRenderProfiler.get();
-            profiler.push("necromancer_draw_immediate_" + VeilRenderType.getName(renderType));
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                ByteBuffer instancedData = stack.malloc(8);
-                instancedData.put(0, (byte) this.overlay);
-                instancedData.put(1, (byte) this.light);
-                instancedData.put(2, (byte) this.r);
-                instancedData.put(3, (byte) this.g);
-                instancedData.put(4, (byte) this.b);
-                instancedData.put(5, (byte) this.a);
-                instancedData.put(6, (byte) 0);
-                instancedData.put(7, (byte) 0);
-                this.affineTransform.set(this.transform);
-
-                if (instancedBuffer == 0) {
-                    instancedBuffer = GlStateManager._glGenBuffers();
-                }
-                if (boneBuilder == null) {
-                    boneBuilder = new ByteBufferBuilder(BASE_INSTANCES * Skeleton.UNIFORM_STRIDE);
-                }
-                VertexArray.upload(instancedBuffer, instancedData, VertexArray.DrawUsage.DYNAMIC);
-                updateBlockSize(1, skin.getSkeletonDataSize());
-                skin.render(renderType, List.of(this.affineTransform), List.of(skeleton), instancedBuffer, boneBuilder, boneBuffer, boneBlock, FloatList.of(partialTicks));
-            }
-            profiler.pop();
-        }
-
-        @Override
-        public @NotNull VertexConsumer getBuffer(@NotNull RenderType renderType) {
-            return Minecraft.getInstance().renderBuffers().bufferSource().getBuffer(renderType);
-        }
-    }
-
-    public static class Batched extends RendererImpl {
-
-        private final List<ByteBufferBuilder> bufferBuilderList;
-        private final Int2ObjectMap<SkeletonBatch> skeletonBatches;
-        private final Map<RenderType, BufferBuilder> buffers;
-
-        private int bufferIndex;
-
-        public Batched() {
-            this.bufferBuilderList = new ObjectArrayList<>();
-            this.skeletonBatches = new Int2ObjectArrayMap<>();
-            this.buffers = new Object2ObjectArrayMap<>();
-        }
-
-        @Override
-        public void draw(RenderType renderType, Skeleton skeleton, Skin skin, float partialTicks) {
-            SkeletonBatch batch = this.skeletonBatches.computeIfAbsent(skin.hashCode() * 31 + renderType.hashCode(), unused -> new SkeletonBatch(renderType, skin));
-            batch.add(this.transform, skeleton, this.overlay, this.light, this.r, this.g, this.b, this.a, partialTicks);
-        }
-
-        @Override
-        public @NotNull VertexConsumer getBuffer(@NotNull RenderType renderType) {
-            BufferBuilder buffer = this.buffers.get(renderType);
-            if (buffer != null) {
-                return buffer;
-            }
-
-            if (this.bufferIndex >= this.bufferBuilderList.size()) {
-                ByteBufferBuilder builder = new ByteBufferBuilder(renderType.bufferSize());
-                this.bufferBuilderList.add(builder);
-                buffer = new BufferBuilder(builder, renderType.mode(), renderType.format());
-            } else {
-                buffer = new BufferBuilder(this.bufferBuilderList.get(this.bufferIndex), renderType.mode(), renderType.format());
-            }
-
-            this.bufferIndex++;
-            this.buffers.put(renderType, buffer);
-            return buffer;
-        }
-
-        public void begin() {
-            this.bufferIndex = 0;
-            this.reset();
-        }
-
-        public void end() {
-            VeilRenderProfiler profiler = VeilRenderProfiler.get();
-            for (SkeletonBatch batch : this.skeletonBatches.values()) {
-                profiler.push("necromancer_draw_batched_" + VeilRenderType.getName(batch.renderType));
-                batch.render();
-                profiler.pop();
-            }
-            this.skeletonBatches.clear();
-
-            for (Map.Entry<RenderType, BufferBuilder> entry : this.buffers.entrySet()) {
-                try (MeshData data = entry.getValue().build()) {
-                    if (data != null) {
-                        entry.getKey().draw(data);
-                    }
-                }
-            }
-            this.buffers.clear();
-
-            ListIterator<ByteBufferBuilder> iterator = this.bufferBuilderList.listIterator(this.bufferIndex);
-            while (iterator.hasNext()) {
-                iterator.next().close();
-                iterator.remove();
-            }
-        }
-    }
-
-    private static class SkeletonBatch {
-
-        private final RenderType renderType;
-        private final Skin skin;
-        private final List<Matrix4x3f> transforms;
-        private final List<Skeleton> skeletons;
-        private final FloatList partialTicks;
-
-        private ByteBuffer instancedData;
-
-        private SkeletonBatch(RenderType renderType, Skin skin) {
-            this.renderType = renderType;
-            this.skin = skin;
-            this.transforms = new ObjectArrayList<>();
-            this.skeletons = new ObjectArrayList<>();
-            this.partialTicks = new FloatArrayList();
-
-            this.instancedData = MemoryUtil.memAlloc(BASE_INSTANCES * 8); // Save space for 100 instances
-        }
-
-        public void add(Matrix4fc transform, Skeleton skeleton, int overlay, int light, int r, int g, int b, int a, float partialTicks) {
-            if (this.instancedData.capacity() - this.instancedData.position() < 8) {
-                this.instancedData = MemoryUtil.memRealloc(this.instancedData, (int) (this.instancedData.capacity() * 1.5));
-            }
-            this.instancedData.put((byte) overlay);
-            this.instancedData.put((byte) light);
-            this.instancedData.put((byte) r);
-            this.instancedData.put((byte) g);
-            this.instancedData.put((byte) b);
-            this.instancedData.put((byte) a);
-            this.instancedData.put((byte) 0);
-            this.instancedData.put((byte) 0);
-            this.transforms.add(new Matrix4x3f().set(transform));
-            this.skeletons.add(skeleton);
-            this.partialTicks.add(partialTicks);
-        }
-
-        public void render() {
-            try {
-                if (instancedBuffer == 0) {
-                    instancedBuffer = GlStateManager._glGenBuffers();
-                }
-                if (boneBuilder == null) {
-                    boneBuilder = new ByteBufferBuilder(BASE_INSTANCES * Skeleton.UNIFORM_STRIDE);
-                }
-                this.instancedData.flip();
-                VertexArray.upload(instancedBuffer, this.instancedData, VertexArray.DrawUsage.DYNAMIC);
-                updateBlockSize(this.skeletons.size(), this.skin.getSkeletonDataSize());
-                this.skin.render(this.renderType, this.transforms, this.skeletons, instancedBuffer, boneBuilder, boneBuffer, boneBlock, this.partialTicks);
-            } finally {
-                MemoryUtil.memFree(this.instancedData);
-            }
+    private static abstract class State implements NecromancerRenderer {
+        private int overlay, light;
+        private final Vector4f color = new Vector4f(1);
+        private final Matrix4f transform = new Matrix4f();
+        State() { this.reset(); }
+        protected abstract void accept(Draw draw);
+        @Override public void setUv1(int u, int v) { this.overlay = u & 65535 | (v & 65535) << 16; }
+        @Override public void setUv2(int u, int v) { this.light = u & 65535 | (v & 65535) << 16; }
+        @Override public void setColor(float r, float g, float b, float a) { this.color.set(r, g, b, a); }
+        @Override public void setColor(int color) { this.color.set((color >>> 16 & 255) / 255f, (color >>> 8 & 255) / 255f, (color & 255) / 255f, (color >>> 24) / 255f); }
+        @Override public void setTransform(Matrix4fc transform) { this.transform.set(transform); }
+        @Override public void reset() { this.overlay = OverlayTexture.NO_OVERLAY; this.light = LightCoordsUtil.FULL_BRIGHT; this.color.set(1); this.transform.identity(); }
+        @Override public void draw(RenderType type, Skeleton skeleton, Skin skin, float partialTicks) {
+            this.accept(new Draw(type, skin.snapshot(skeleton, this.transform, this.color, this.overlay, this.light, partialTicks)));
         }
     }
 }

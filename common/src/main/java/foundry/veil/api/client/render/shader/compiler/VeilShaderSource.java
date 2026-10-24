@@ -2,7 +2,7 @@ package foundry.veil.api.client.render.shader.compiler;
 
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.Object2IntMaps;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collections;
@@ -18,13 +18,13 @@ import java.util.Set;
  * @param includes               All shader imports included in this file
  * @author Ocelot
  */
-public record VeilShaderSource(@Nullable ResourceLocation sourceId,
+public record VeilShaderSource(@Nullable Identifier sourceId,
                                String sourceCode,
                                Object2IntMap<String> uniformBindings,
                                Set<String> definitionDependencies,
-                               Set<ResourceLocation> includes) {
+                               Set<Identifier> includes) {
 
-    public VeilShaderSource(@Nullable ResourceLocation sourceId, String sourceCode) {
+    public VeilShaderSource(@Nullable Identifier sourceId, String sourceCode) {
         this(sourceId, sourceCode, Object2IntMaps.emptyMap(), Collections.emptySet(), Collections.emptySet());
     }
 }

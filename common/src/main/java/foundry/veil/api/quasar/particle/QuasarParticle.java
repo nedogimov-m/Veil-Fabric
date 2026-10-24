@@ -98,7 +98,7 @@ public class QuasarParticle {
         double d1 = dy;
         double d2 = dz;
         if (this.hasCollision && dx * dx + dy * dy + dz * dz < MAXIMUM_COLLISION_VELOCITY_SQUARED) {
-            Vec3 vec3 = Entity.collideBoundingBox(null, new Vec3(dx, dy, dz), box, this.level, List.of());
+            Vec3 vec3 = Entity.collideBoundingBox(net.minecraft.world.phys.shapes.CollisionContext.empty(), new Vec3(dx, dy, dz), box, this.level, List.of());
             dx = vec3.x;
             dy = vec3.y;
             dz = vec3.z;
@@ -154,7 +154,7 @@ public class QuasarParticle {
     }
 
     private int getLightColor() {
-        return LevelRenderer.getLightColor(this.level, this.getBlockPosition());
+        return net.minecraft.util.LightCoordsUtil.getLightCoords(this.level, this.getBlockPosition());
     }
 
     @ApiStatus.Internal
@@ -266,13 +266,6 @@ public class QuasarParticle {
 
     public Vector3f getRotation() {
         return this.rotation;
-    }
-
-    /**
-     * @since 4.5.0
-     */
-    public void setRotation(float x, float y, float z) {
-        this.rotation.set(x, y, z);
     }
 
     public float getRadius() {

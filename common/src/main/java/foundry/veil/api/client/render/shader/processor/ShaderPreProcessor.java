@@ -1,12 +1,9 @@
 package foundry.veil.api.client.render.shader.processor;
 
-import com.mojang.blaze3d.vertex.VertexFormat;
-import foundry.veil.api.client.render.VeilRenderSystem;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
 import foundry.veil.api.client.render.shader.ShaderFeature;
-import foundry.veil.api.client.render.shader.ShaderManager;
 import foundry.veil.api.client.render.shader.ShaderPreDefinitions;
 import foundry.veil.api.client.render.shader.program.ProgramDefinition;
-import foundry.veil.impl.client.render.shader.program.DynamicShaderProgramImpl;
 import io.github.ocelot.glslprocessor.api.GlslSyntaxException;
 import io.github.ocelot.glslprocessor.api.node.GlslNode;
 import io.github.ocelot.glslprocessor.api.node.GlslRootNode;
@@ -14,9 +11,10 @@ import io.github.ocelot.glslprocessor.api.node.GlslTree;
 import io.github.ocelot.glslprocessor.api.node.function.GlslFunctionNode;
 import io.github.ocelot.glslprocessor.api.node.variable.GlslNewFieldNode;
 import io.github.ocelot.glslprocessor.lib.anarres.cpp.LexerException;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.Nullable;
-import org.lwjgl.opengl.GLCapabilities;
+import com.mojang.renderpearl.api.pipeline.ShaderType;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 
 import java.io.IOException;
 import java.util.*;
@@ -105,7 +103,7 @@ public interface ShaderPreProcessor {
          * @throws GlslSyntaxException If there was an error in the syntax of the source code
          * @throws LexerException      If an error occurs during shader C preprocessing
          */
-        GlslTree modifyInclude(@Nullable ResourceLocation name, String source) throws IOException, GlslSyntaxException, LexerException;
+        GlslTree modifyInclude(@Nullable Identifier name, String source) throws IOException, GlslSyntaxException, LexerException;
 
         /**
          * @return A custom map of data shared for a shader program
@@ -116,7 +114,7 @@ public interface ShaderPreProcessor {
          * @return The id of the shader being compiled or <code>null</code> if the shader is compiled from a raw string
          */
         @Nullable
-        ResourceLocation name();
+        Identifier name();
 
         /**
          * @return Whether the processor is being run for a source file and not a #include file
@@ -133,17 +131,27 @@ public interface ShaderPreProcessor {
          */
         int type();
 
-        /**
-         * @return The current OpenGL capabilities
-         * @since 3.5.0
-         */
-        GLCapabilities glCapabilities();
+        /** The actual native stage; unsupported old extension stages fail explicitly. */
+        default ShaderType stage() {
+            return switch (this.type()) {
+                case GL_VERTEX_SHADER -> ShaderType.VERTEX;
+                case GL_FRAGMENT_SHADER -> ShaderType.FRAGMENT;
+                default -> throw new UnsupportedOperationException("No native RenderPearl stage for shader token: " + this.type());
+            };
+        }
 
         /**
          * @return The name of this shader type
          */
         default String typeName() {
-            return ShaderManager.getTypeName(this.type());
+            return switch (this.type()) {
+                case GL_VERTEX_SHADER -> "vertex";
+                case GL_FRAGMENT_SHADER -> "fragment";
+                case GL_GEOMETRY_SHADER -> "geometry";
+                case GL_TESS_CONTROL_SHADER -> "tessellation control";
+                case GL_TESS_EVALUATION_SHADER -> "tessellation evaluation";
+                default -> "shader " + this.type();
+            };
         }
 
         /**
@@ -189,7 +197,7 @@ public interface ShaderPreProcessor {
          * @since 2.0.0
          */
         default boolean hasFeatures(ShaderFeature... features) {
-            return VeilRenderSystem.renderer().getShaderManager().hasFeatures(features);
+            return Arrays.stream(features).allMatch(ShaderFeature::isSupported);
         }
 
         /**
@@ -200,7 +208,7 @@ public interface ShaderPreProcessor {
          * @param strategy How duplicate shader methods should be handled
          * @throws IOException If there was an error loading the import file
          */
-        default void include(GlslTree tree, ResourceLocation name, IncludeOverloadStrategy strategy) throws IOException, GlslSyntaxException, LexerException {
+        default void include(GlslTree tree, Identifier name, IncludeOverloadStrategy strategy) throws IOException, GlslSyntaxException, LexerException {
             this.include(tree, name.toString(), this.shaderImporter().loadImport(this, name, false), strategy);
         }
 
@@ -311,16 +319,14 @@ public interface ShaderPreProcessor {
 
         /**
          * @return The importer instance
-         * @see #include(GlslTree, ResourceLocation, IncludeOverloadStrategy)
+         * @see #include(GlslTree, Identifier, IncludeOverloadStrategy)
          */
         ShaderImporter shaderImporter();
 
         /**
          * @return The set of pre-definitions for shaders
          */
-        default ShaderPreDefinitions preDefinitions() {
-            return VeilRenderSystem.renderer().getShaderDefinitions();
-        }
+        ShaderPreDefinitions preDefinitions();
 
         /**
          * @return All macros used to compile shaders
@@ -338,10 +344,13 @@ public interface ShaderPreProcessor {
          */
         String shaderInstance();
 
+        /** The actual immutable pipeline being compiled, including native OIT defines and vertex bindings. */
+        RenderPipeline pipeline();
+
         /**
          * @return The vertex format specified in the shader
          */
-        VertexFormat vertexFormat();
+        @Nullable VertexFormat vertexFormat();
     }
 
     /**
@@ -367,7 +376,6 @@ public interface ShaderPreProcessor {
 
         /**
          * @return Whether the shader being compiled is dynamic
-         * @see DynamicShaderProgramImpl
          * @since 2.2.0
          */
         boolean isDynamic();

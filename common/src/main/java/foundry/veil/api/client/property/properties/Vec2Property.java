@@ -1,13 +1,13 @@
 package foundry.veil.api.client.property.properties;
 
-import com.mojang.blaze3d.shaders.Uniform;
 import foundry.veil.api.client.property.Property;
 import foundry.veil.api.client.registry.PropertyRegistry;
+import foundry.veil.api.client.render.gpu.GpuShaderProgram;
+import foundry.veil.api.client.render.gpu.GpuUniformBuffer;
 import foundry.veil.api.flare.modifier.PropertyModifier;
 import gg.moonflower.molangcompiler.api.MolangEnvironment;
 import gg.moonflower.molangcompiler.api.MolangExpression;
 import gg.moonflower.molangcompiler.api.MolangRuntime;
-import net.minecraft.client.renderer.ShaderInstance;
 import org.joml.Vector2f;
 import org.joml.Vector2fc;
 
@@ -20,10 +20,10 @@ public class Vec2Property extends Property<Vector2f> {
     }
 
     @Override
-    public void applyValue(String name, ShaderInstance shader) {
-        Uniform uniform = shader.getUniform(name);
+    public void applyValue(String name, GpuShaderProgram shader, String block) {
+        GpuUniformBuffer uniform = uniform(name, shader, block, GpuUniformBuffer.ValueType.VEC2);
         if (uniform != null) {
-            uniform.set(this.overrideValue.x, this.overrideValue.y);
+            uniform.setVector(name, this.overrideValue.x, this.overrideValue.y);
         }
     }
 

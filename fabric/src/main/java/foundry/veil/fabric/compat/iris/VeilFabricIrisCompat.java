@@ -8,7 +8,11 @@ import it.unimi.dsi.fastutil.objects.Object2ObjectMaps;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
 import net.irisshaders.iris.targets.RenderTargets;
-import net.minecraft.client.renderer.ShaderInstance;
+import com.mojang.renderpearl.backend.opengl.GlProgram;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import net.irisshaders.iris.api.v0.IrisApi;
+import net.irisshaders.iris.api.v0.IrisProgram;
+import net.irisshaders.iris.api.v0.IrisShadowProgram;
 
 import java.util.Collections;
 import java.util.Map;
@@ -17,10 +21,10 @@ import java.util.Set;
 public class VeilFabricIrisCompat implements IrisCompat {
 
     @Override
-    public Set<ShaderInstance> getLoadedShaders() {
+    public Set<GlProgram> getLoadedShaders() {
         WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipelineNullable();
         if (pipeline instanceof IrisRenderingPipelineAccessor accessor) {
-            return accessor.getLoadedShaders();
+            return Set.copyOf(accessor.getLoadedShaders());
         }
         return Collections.emptySet();
     }
@@ -43,13 +47,21 @@ public class VeilFabricIrisCompat implements IrisCompat {
     }
 
     @Override
-    public boolean areShadersLoaded() {
-        return Iris.getCurrentPack().isPresent();
+    public Flags getFlags() {
+        IrisApi api = IrisApi.getInstance();
+        return new Flags(api.isShaderPackInUse(), api.isRenderingShadowPass(), api.isReverseZDuringShaders());
+    }
+
+    @Override public void assignPipeline(RenderPipeline pipeline, String program) {
+        IrisApi.getInstance().assignPipeline(pipeline, IrisProgram.valueOf(program));
+    }
+    @Override public void assignShadowPipeline(RenderPipeline pipeline, String program) {
+        IrisApi.getInstance().assignPipelineShadow(pipeline, IrisShadowProgram.valueOf(program));
     }
 
     @Override
     public void recompile() {
-        // TODO
+        try { Iris.reload(); } catch (java.io.IOException failure) { throw new java.io.UncheckedIOException("Cannot reload the actual Iris shader pack", failure); }
     }
 
     @Override

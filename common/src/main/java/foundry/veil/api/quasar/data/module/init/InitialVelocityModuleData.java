@@ -11,7 +11,6 @@ import foundry.veil.api.quasar.emitters.module.InitParticleModule;
 import foundry.veil.api.quasar.particle.ParticleModuleSet;
 import foundry.veil.api.util.CodecUtil;
 import imgui.ImGui;
-import org.joml.Quaterniond;
 import org.joml.Vector3d;
 import org.joml.Vector3dc;
 
@@ -38,7 +37,7 @@ public final class InitialVelocityModuleData implements ParticleModuleData, Edit
     @Override
     public void addModules(ParticleModuleSet.Builder builder) {
         // TODO takesParentRotation
-        builder.addModule((InitParticleModule) particle -> particle.getVelocity().add(this.velocityDirection.normalize(this.strength, new Vector3d()).rotate(particle.getEmitter().getRotation().get(new Quaterniond()))));
+        builder.addModule((InitParticleModule) particle -> particle.getVelocity().add(this.velocityDirection.normalize(this.strength, new Vector3d())));
     }
 
     @Override

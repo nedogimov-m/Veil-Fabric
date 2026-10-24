@@ -22,13 +22,8 @@ public class ChunkVertexConsumerMixin {
     @Shadow(remap = false)
     private int vertexIndex;
 
-    @Inject(method = "setNormal", at = @At("HEAD"), require = 0)
-    public void setNormal(float normalX, float normalY, float normalZ, CallbackInfoReturnable<VertexConsumer> cir) {
-        ((ChunkVertexEncoderVertexExtension) this.vertices[this.vertexIndex]).veil$setNormal(NormI8.pack(normalX, normalY, normalZ));
-    }
-
-    @Inject(method = "setNormal", at = @At("HEAD"), remap = false, require = 0)
-    public void setNormalUnmapped(float normalX, float normalY, float normalZ, CallbackInfoReturnable<VertexConsumer> cir) {
+    @Inject(method = "setNormal(FFF)Lcom/mojang/blaze3d/vertex/VertexConsumer;", at = @At("HEAD"), remap = false)
+    private void veil$captureNormal(float normalX, float normalY, float normalZ, CallbackInfoReturnable<VertexConsumer> cir) {
         ((ChunkVertexEncoderVertexExtension) this.vertices[this.vertexIndex]).veil$setNormal(NormI8.pack(normalX, normalY, normalZ));
     }
 }

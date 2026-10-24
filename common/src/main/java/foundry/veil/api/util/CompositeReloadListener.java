@@ -1,78 +1,43 @@
 package foundry.veil.api.util;
 
 import net.minecraft.server.packs.resources.PreparableReloadListener;
-import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.util.Unit;
-import net.minecraft.util.profiling.ProfilerFiller;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
-import java.util.*;
+import java.util.Arrays;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-/**
- * @author Ocelot
- */
+/** One native shared-state reload transaction with a common preparation barrier. */
 public final class CompositeReloadListener implements PreparableReloadListener {
-
     private final PreparableReloadListener[] listeners;
-
-    private CompositeReloadListener(PreparableReloadListener[] listeners) {
-        this.listeners = listeners;
+    private CompositeReloadListener(PreparableReloadListener[] listeners){this.listeners=listeners.clone();}
+    public static PreparableReloadListener of(PreparableReloadListener... listeners){
+        Arrays.stream(listeners).forEach(Objects::requireNonNull);
+        return listeners.length==1?listeners[0]:new CompositeReloadListener(listeners);
     }
-
-    /**
-     * Creates a reload listener that waits for all listeners to complete in stages.
-     *
-     * @param listeners The listeners to composite together
-     * @return A new listener that properly allows listeners to use barriers
-     */
-    public static PreparableReloadListener of(PreparableReloadListener... listeners) {
-        if (listeners.length == 0) {
-            return new PreparableReloadListener() {
-                @Override
-                public @NotNull CompletableFuture<Void> reload(@NotNull PreparationBarrier preparationBarrier, @NotNull ResourceManager resourceManager, @NotNull ProfilerFiller prepareProfiler, @NotNull ProfilerFiller applyProfiler, @NotNull Executor backgroundExecutor, @NotNull Executor gameExecutor) {
-                    return preparationBarrier.wait(null);
-                }
-
-                @Override
-                public @NotNull String getName() {
-                    return "EmptyListener";
-                }
-            };
-        }
-        if (listeners.length == 1) {
-            return listeners[0];
-        }
-        return new CompositeReloadListener(listeners);
-    }
-
-    @Override
-    public @NotNull CompletableFuture<Void> reload(@NotNull PreparationBarrier preparationBarrier, @NotNull ResourceManager resourceManager, @NotNull ProfilerFiller prepareProfiler, @NotNull ProfilerFiller applyProfiler, @NotNull Executor backgroundExecutor, @NotNull Executor gameExecutor) {
-        CompletableFuture<Unit> allComplete = new CompletableFuture<>();
-        Set<PreparableReloadListener> preparingListeners = new HashSet<>(Arrays.asList(this.listeners));
-
-        List<CompletableFuture<?>> futures = new ArrayList<>(this.listeners.length);
-        for (PreparableReloadListener listener : this.listeners) {
-            PreparationBarrier barrier = new PreparationBarrier() {
-                @Override
-                public <T> @NotNull CompletableFuture<T> wait(@Nullable T backgroundResult) {
-                    if (preparingListeners.remove(listener) && preparingListeners.isEmpty()) {
-                        preparationBarrier.wait(null).thenRun(() -> allComplete.complete(Unit.INSTANCE));
+    @Override public void prepareSharedState(SharedState state){for(var listener:listeners)listener.prepareSharedState(state);}
+    @Override public CompletableFuture<Void> reload(SharedState state,Executor prepare,PreparationBarrier upstream,Executor apply){
+        if(listeners.length==0)return upstream.wait(null).thenApply(ignored->null);
+        final var ready=new CompletableFuture<Void>();final var remaining=new AtomicInteger(listeners.length);
+        final var results=new CompletableFuture<?>[listeners.length];
+        for(int i=0;i<listeners.length;i++){
+            final var crossed=new AtomicBoolean();
+            PreparationBarrier barrier=new PreparationBarrier(){
+                @Override public <T> CompletableFuture<T> wait(T value){
+                    if(crossed.compareAndSet(false,true)&&remaining.decrementAndGet()==0){
+                        try{upstream.wait(null).whenComplete((ignored,failure)->{if(failure!=null)ready.completeExceptionally(failure);else ready.complete(null);});}
+                        catch(Throwable failure){ready.completeExceptionally(failure);}
                     }
-                    return allComplete.thenApply(unused -> backgroundResult);
+                    return ready.thenApply(ignored->value);
                 }
             };
-            futures.add(listener.reload(barrier, resourceManager, prepareProfiler, applyProfiler, backgroundExecutor, gameExecutor));
+            try{results[i]=listeners[i].reload(state,prepare,barrier,apply);}
+            catch(Throwable failure){results[i]=CompletableFuture.failedFuture(failure);}
+            results[i].whenComplete((ignored,failure)->{if(failure!=null)ready.completeExceptionally(failure);});
         }
-
-        return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
+        return CompletableFuture.allOf(results);
     }
-
-    @Override
-    public @NotNull String getName() {
-        return "CompositeListener[" + Arrays.stream(this.listeners).map(PreparableReloadListener::getName).collect(Collectors.joining(",")) + "]";
-    }
+    @Override public String getName(){return "CompositeListener["+Arrays.stream(listeners).map(PreparableReloadListener::getName).collect(Collectors.joining(","))+"]";}
 }

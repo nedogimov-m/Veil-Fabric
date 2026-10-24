@@ -4,7 +4,7 @@ import foundry.veil.api.resource.VeilResource;
 import foundry.veil.api.resource.VeilResourceAction;
 import foundry.veil.api.resource.VeilResourceInfo;
 import foundry.veil.api.resource.VeilResourceManager;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceMetadata;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
@@ -14,7 +14,7 @@ import java.util.List;
 
 @ApiStatus.Internal
 public record McMetaResource(VeilResourceInfo resourceInfo,
-                             @Nullable ResourceLocation basePath,
+                             @Nullable Identifier basePath,
                              ResourceMetadata metadata) implements VeilResource<McMetaResource> {
 
     @Override

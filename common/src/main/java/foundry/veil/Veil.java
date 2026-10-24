@@ -4,7 +4,7 @@ import foundry.veil.api.molang.VeilMolang;
 import foundry.veil.impl.network.VeilPacketSender;
 import foundry.veil.platform.VeilPlatform;
 import gg.moonflower.molangcompiler.api.MolangCompiler;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,8 +40,8 @@ public class Veil {
         VeilPacketSender.init();
     }
 
-    public static ResourceLocation veilPath(String path) {
-        return ResourceLocation.fromNamespaceAndPath(MODID, path);
+    public static Identifier veilPath(String path) {
+        return Identifier.fromNamespaceAndPath(MODID, path);
     }
 
     public static VeilPlatform platform() {

@@ -1,243 +1,177 @@
 package foundry.veil.api.client.render.framebuffer;
 
-import com.mojang.blaze3d.platform.Window;
+import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.device.GpuDevice;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
-import foundry.veil.Veil;
 import foundry.veil.api.CodecReloadListener;
-import foundry.veil.api.client.render.ext.VeilDebug;
-import gg.moonflower.molangcompiler.api.MolangEnvironment;
-import gg.moonflower.molangcompiler.api.MolangRuntime;
-import it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
-import it.unimi.dsi.fastutil.objects.ObjectArraySet;
-import net.minecraft.ResourceLocationException;
+import foundry.veil.api.client.render.gpu.GpuFramebuffer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.FileToIdConverter;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.util.profiling.ProfilerFiller;
-import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.joml.Vector4f;
 import org.lwjgl.system.NativeResource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER;
-
 /**
- * <p>Manages all framebuffers and custom definitions specified in files.
- * All framebuffers except for the main one can be customized from the
- * <code>modid:pinwheel/framebuffers</code> folder in the assets.</p>
- *
- * @author Ocelot
+ * Resource-driven native GPU framebuffer registry. Allocation/reload/resize is
+ * transactional: a failed replacement never destroys the last working target.
+ * Manually supplied targets stay caller-owned; a borrowed main target never owns
+ * Minecraft's GPU textures. All methods execute on the owning render thread.
  */
 public class FramebufferManager extends CodecReloadListener<FramebufferDefinition> implements NativeResource {
-
-    private static final ResourceLocation MAIN = ResourceLocation.withDefaultNamespace("main");
-
-    public static final Codec<ResourceLocation> FRAMEBUFFER_CODEC = Codec.STRING.comapFlatMap(name -> {
-        try {
-            if (!name.contains(":")) {
-                ResourceLocation id = ResourceLocation.tryBuild("temp", name);
-                return id != null ? DataResult.success(id) : DataResult.error(() -> "Invalid path: " + name);
-            }
-
-            ResourceLocation id = ResourceLocation.tryParse(name);
-            return id != null ? DataResult.success(id) : DataResult.error(() -> "Invalid path: " + name);
-        } catch (ResourceLocationException e) {
-            return DataResult.error(() -> "Not a valid resource location: " + name + ". " + e.getMessage());
-        }
-    }, location -> "temp".equals(location.getNamespace()) ? location.getPath() : location.toString()).stable();
+    private static final Logger LOGGER = LoggerFactory.getLogger("Veil");
+    private static final Identifier MAIN = Identifier.withDefaultNamespace("main");
+    public static final Codec<Identifier> FRAMEBUFFER_CODEC = Codec.STRING.comapFlatMap(name -> {
+        Identifier id = Identifier.tryParse(name.contains(":") ? name : "temp:" + name);
+        return id != null ? DataResult.success(id) : DataResult.error(() -> "Invalid framebuffer ID: " + name);
+    }, id -> "temp".equals(id.getNamespace()) ? id.getPath() : id.toString()).stable();
     public static final FileToIdConverter FRAMEBUFFER_LISTER = FileToIdConverter.json("pinwheel/framebuffers");
 
-    private final Map<ResourceLocation, FramebufferDefinition> framebufferDefinitions;
-    private final Map<ResourceLocation, AdvancedFbo> framebuffers;
-    private final Map<ResourceLocation, AdvancedFbo> framebuffersView;
-    private final Set<ResourceLocation> screenFramebuffers;
-    private final Set<ResourceLocation> manualFramebuffers;
+    private final GpuDevice device;
+    private final Map<Identifier, FramebufferDefinition> definitions = new HashMap<>();
+    private final Map<Identifier, GpuFramebuffer> framebuffers = new HashMap<>();
+    private final Set<Identifier> owned = new HashSet<>();
+    private final Set<Identifier> screenSized = new HashSet<>();
+    private int screenWidth;
+    private int screenHeight;
 
-    /**
-     * Creates a new instance of the framebuffer manager.
-     */
     public FramebufferManager() {
+        this(RenderSystem.getDevice(), Minecraft.getInstance().getWindow().getWidth(), Minecraft.getInstance().getWindow().getHeight());
+        this.setMainFramebuffer(Minecraft.getInstance().gameRenderer.mainRenderTarget());
+    }
+
+    /** Explicit device/size constructor also supports isolated native GPU acceptance. */
+    public FramebufferManager(GpuDevice device, int screenWidth, int screenHeight) {
         super(FramebufferDefinition.CODEC, FRAMEBUFFER_LISTER);
-        this.framebufferDefinitions = new HashMap<>();
-        this.framebuffers = new Object2ObjectArrayMap<>();
-        this.framebuffersView = Collections.unmodifiableMap(this.framebuffers);
-        this.screenFramebuffers = new ObjectArraySet<>();
-        this.manualFramebuffers = new ObjectArraySet<>();
+        this.device = java.util.Objects.requireNonNull(device);
+        if (screenWidth <= 0 || screenHeight <= 0) throw new IllegalArgumentException("Screen dimensions must be positive");
+        this.screenWidth = screenWidth;
+        this.screenHeight = screenHeight;
     }
 
-    private void initFramebuffer(ResourceLocation name, FramebufferDefinition definition, MolangEnvironment runtime) {
+    /** Refresh this borrow after Minecraft resizes its main RenderTarget. */
+    public void setMainFramebuffer(RenderTarget target) {
+        GpuFramebuffer replacement = GpuFramebuffer.borrow(this.device, "Minecraft main", target);
+        this.replace(MAIN, replacement, true);
+    }
+
+    private GpuFramebuffer allocate(Identifier name, FramebufferDefinition definition, int width, int height) {
+        GpuFramebuffer target = definition.createBuilder(width, height).setDebugLabel(name.toString()).build(this.device);
         try {
-            AdvancedFbo fbo = definition.createBuilder(runtime)
-                    .setDebugLabel(name.toString())
-                    .build(true);
-            fbo.clear();
-            AdvancedFbo old = this.framebuffers.put(name, fbo);
-            VeilDebug.get().objectLabel(GL_FRAMEBUFFER, fbo.getId(), "Framebuffer " + name);
-            if (old != null) {
-                old.free();
-            }
-            if (!definition.autoClear()) {
-                this.manualFramebuffers.add(name);
-            } else {
-                this.manualFramebuffers.remove(name);
-            }
-        } catch (Exception e) {
-            Veil.LOGGER.error("Failed to initialize framebuffer: {}", name, e);
+            var encoder = this.device.createCommandEncoder();
+            target.clear(encoder, new Vector4f(0,0,0,0), RenderSystem.DEFAULT_DEPTH_CLEAR_VALUE);
+            encoder.submit();
+            return target;
+        } catch (RuntimeException | Error failure) {
+            target.close();
+            throw failure;
         }
     }
 
-    @ApiStatus.Internal
+    private void replace(Identifier name, GpuFramebuffer replacement, boolean managerOwned) {
+        GpuFramebuffer previous = this.framebuffers.put(name, replacement);
+        boolean closePrevious = this.owned.remove(name);
+        if (managerOwned) this.owned.add(name);
+        if (closePrevious && previous != replacement) previous.close();
+    }
+
+    public void setDefinition(Identifier name, FramebufferDefinition definition) {
+        if (name.equals(MAIN)) throw new IllegalArgumentException("The main RenderTarget is externally owned");
+        GpuFramebuffer replacement = this.allocate(name, definition, this.screenWidth, this.screenHeight);
+        this.replace(name, replacement, true);
+        this.definitions.put(name, definition);
+        if (!definition.width().isConstant() || !definition.height().isConstant()) this.screenSized.add(name);
+        else this.screenSized.remove(name);
+    }
+
+    /** Allocate every changed screen target before swapping any of them. */
     public void resizeFramebuffers(int width, int height) {
-        MolangRuntime runtime = MolangRuntime.runtime()
-                .setQuery("screen_width", width)
-                .setQuery("screen_height", height)
-                .create();
-
-        for (ResourceLocation name : this.screenFramebuffers) {
-            FramebufferDefinition definition = this.framebufferDefinitions.get(name);
-            if (definition != null) {
-                this.initFramebuffer(name, definition, runtime);
+        if (width <= 0 || height <= 0) throw new IllegalArgumentException("Screen dimensions must be positive");
+        var replacements = new HashMap<Identifier, GpuFramebuffer>();
+        try {
+            for (Identifier name : this.screenSized) {
+                replacements.put(name, this.allocate(name, this.definitions.get(name), width, height));
             }
+        } catch (RuntimeException | Error failure) {
+            replacements.values().forEach(GpuFramebuffer::close);
+            throw failure;
         }
+        this.screenWidth = width;
+        this.screenHeight = height;
+        replacements.forEach((name, target) -> this.replace(name, target, true));
     }
 
-    @ApiStatus.Internal
+    /** Auto-clear resource targets, never manual/main targets, with one encoder. */
     public void clear() {
-        if (this.framebuffers.size() == this.manualFramebuffers.size()) {
-            return;
-        }
-
-        VeilDebug debug = VeilDebug.get();
-        debug.pushDebugGroup("Veil Clear Framebuffers");
-        this.framebuffers.forEach((name, fbo) -> {
-            if (!this.manualFramebuffers.contains(name)) {
-                fbo.clear();
-            }
+        if (this.definitions.isEmpty()) return;
+        var encoder = this.device.createCommandEncoder();
+        this.definitions.forEach((name, definition) -> {
+            if (definition.autoClear()) this.framebuffers.get(name).clear(encoder, new Vector4f(0,0,0,0), RenderSystem.DEFAULT_DEPTH_CLEAR_VALUE);
         });
-        debug.popDebugGroup();
+        encoder.submit();
     }
 
-    /**
-     * Updates a single framebuffer definition and initializes a new framebuffer.
-     *
-     * @param name       The name of the framebuffer to set
-     * @param definition The new definition
-     */
-    public void setDefinition(ResourceLocation name, FramebufferDefinition definition) {
-        Window window = Minecraft.getInstance().getWindow();
-        MolangRuntime runtime = MolangRuntime.runtime()
-                .setQuery("screen_width", window.getWidth())
-                .setQuery("screen_height", window.getHeight())
-                .create();
-
-        RenderSystem.clearColor(0.0F, 0.0F, 0.0F, 0.0F);
-        this.framebufferDefinitions.put(name, definition);
-        this.initFramebuffer(name, definition, runtime);
-        if (!definition.width().isConstant() || !definition.height().isConstant()) {
-            this.screenFramebuffers.add(name);
-        } else {
-            this.screenFramebuffers.remove(name);
-        }
-        AdvancedFbo.unbind();
+    /** Caller retains ownership, including on manager free/reload. */
+    public void setFramebuffer(Identifier name, GpuFramebuffer framebuffer) {
+        if (name.equals(MAIN)) throw new IllegalArgumentException("Use setMainFramebuffer for the borrowed main target");
+        this.replace(name, java.util.Objects.requireNonNull(framebuffer), false);
+        this.definitions.remove(name);
+        this.screenSized.remove(name);
     }
 
-    /**
-     * Sets the value of the specified framebuffer to a manually defined buffer.
-     * Old buffers defined using the data-driven API will be overwritten and deleted.
-     *
-     * @param name The name of the framebuffer to add
-     * @param fbo  The framebuffer to add
-     */
-    public void setFramebuffer(ResourceLocation name, AdvancedFbo fbo) {
-        if (this.manualFramebuffers.add(name)) {
-            AdvancedFbo oldBuffer = this.framebuffers.remove(name);
-            if (oldBuffer != null) {
-                oldBuffer.free();
-                Veil.LOGGER.warn("Replaced defined framebuffer {} with manual buffer", name);
+    public @Nullable GpuFramebuffer removeFramebuffer(Identifier name) {
+        if (this.owned.contains(name)) return null;
+        this.definitions.remove(name);
+        this.screenSized.remove(name);
+        return this.framebuffers.remove(name);
+    }
+    public @Nullable GpuFramebuffer getFramebuffer(Identifier name) { return this.framebuffers.get(name); }
+    public @Nullable FramebufferDefinition getFramebufferDefinition(Identifier name) { return this.definitions.get(name); }
+    public Map<Identifier, GpuFramebuffer> getFramebuffers() { return Collections.unmodifiableMap(this.framebuffers); }
+
+    /** Resource reload swaps the complete managed set only after allocation succeeds. */
+    @Override protected void apply(Map<Identifier, FramebufferDefinition> data, ResourceManager resources, ProfilerFiller profiler) {
+        var replacements = new HashMap<Identifier, GpuFramebuffer>();
+        try {
+            for (var entry : data.entrySet()) {
+                if (entry.getKey().equals(MAIN)) throw new IllegalArgumentException("Resource pack cannot replace the Minecraft main framebuffer");
+                replacements.put(entry.getKey(), this.allocate(entry.getKey(), entry.getValue(), this.screenWidth, this.screenHeight));
             }
+        } catch (RuntimeException | Error failure) {
+            replacements.values().forEach(GpuFramebuffer::close);
+            throw failure;
         }
-
-        this.framebuffers.put(name, fbo);
-        VeilDebug.get().objectLabel(GL_FRAMEBUFFER, fbo.getId(), "Framebuffer " + name);
-    }
-
-    /**
-     * Removes the specified manual framebuffer without freeing it.
-     *
-     * @param name The name of the framebuffer to remove
-     * @return The framebuffer previously defined or <code>null</code> if there was no manual buffer defined
-     */
-    public @Nullable AdvancedFbo removeFramebuffer(ResourceLocation name) {
-        if (this.manualFramebuffers.remove(name)) {
-            return this.framebuffers.remove(name);
+        for (Identifier name : Set.copyOf(this.definitions.keySet())) {
+            GpuFramebuffer previous = this.framebuffers.remove(name);
+            if (this.owned.remove(name) && previous != null) previous.close();
         }
-        return null;
-    }
-
-    /**
-     * Retrieves a framebuffer by the specified name.
-     *
-     * @param name The name of the framebuffer to retrieve
-     * @return The framebuffer by that name
-     */
-    public @Nullable AdvancedFbo getFramebuffer(ResourceLocation name) {
-        return this.framebuffers.get(name);
-    }
-
-    /**
-     * Retrieves a framebuffer definition by the specified name.
-     *
-     * @param name The name of the definition to retrieve
-     * @return The definition by that name
-     */
-    public @Nullable FramebufferDefinition getFramebufferDefinition(ResourceLocation name) {
-        return this.framebufferDefinitions.get(name);
-    }
-
-    /**
-     * @return An immutable view of all custom framebuffers loaded
-     */
-    public Map<ResourceLocation, AdvancedFbo> getFramebuffers() {
-        return this.framebuffersView;
-    }
-
-    @Override
-    protected void apply(@NotNull Map<ResourceLocation, FramebufferDefinition> data, @NotNull ResourceManager resourceManager, @NotNull ProfilerFiller profilerFiller) {
-        this.framebufferDefinitions.clear();
-        this.framebufferDefinitions.putAll(data);
-        Veil.LOGGER.info("Loaded {} framebuffers", this.framebufferDefinitions.size());
-
-        this.free();
-        Window window = Minecraft.getInstance().getWindow();
-        MolangRuntime runtime = MolangRuntime.runtime()
-                .setQuery("screen_width", window.getWidth())
-                .setQuery("screen_height", window.getHeight())
-                .create();
-
-        this.framebufferDefinitions.forEach((name, definition) -> {
-            this.initFramebuffer(name, definition, runtime);
-            if (!definition.width().isConstant() || !definition.height().isConstant()) {
-                this.screenFramebuffers.add(name);
-            }
+        this.definitions.clear();
+        this.screenSized.clear();
+        data.forEach((name, definition) -> {
+            this.replace(name, replacements.get(name), true);
+            this.definitions.put(name, definition);
+            if (!definition.width().isConstant() || !definition.height().isConstant()) this.screenSized.add(name);
         });
-
-        this.setFramebuffer(MAIN, AdvancedFbo.getMainFramebuffer());
+        LOGGER.info("Loaded {} native GPU framebuffers", data.size());
     }
 
-    @Override
-    public void free() {
-        this.framebuffers.keySet().removeAll(this.manualFramebuffers);
-        this.framebuffers.values().forEach(AdvancedFbo::free);
+    @Override public void free() {
+        for (Identifier name : this.owned) this.framebuffers.get(name).close();
         this.framebuffers.clear();
-        this.manualFramebuffers.clear();
-        this.screenFramebuffers.clear();
+        this.owned.clear();
+        this.definitions.clear();
+        this.screenSized.clear();
     }
 }

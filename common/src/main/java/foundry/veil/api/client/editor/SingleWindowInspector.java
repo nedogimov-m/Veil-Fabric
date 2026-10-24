@@ -1,6 +1,5 @@
 package foundry.veil.api.client.editor;
 
-import foundry.veil.api.client.render.VeilRenderSystem;
 import imgui.ImGui;
 import imgui.type.ImBoolean;
 import net.minecraft.network.chat.Component;
@@ -22,7 +21,7 @@ public abstract class SingleWindowInspector implements Inspector {
         ImGui.end();
 
         if (!this.open.get()) {
-            VeilRenderSystem.renderer().getEditorManager().hide(this);
+            InspectorState.hide(this);
         }
     }
 

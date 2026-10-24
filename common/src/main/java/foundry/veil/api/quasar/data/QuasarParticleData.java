@@ -8,8 +8,8 @@ import foundry.veil.api.quasar.particle.RenderStyle;
 import foundry.veil.api.quasar.particle.SpriteData;
 import foundry.veil.api.quasar.registry.RenderStyleRegistry;
 import net.minecraft.core.Holder;
-import net.minecraft.resources.RegistryFileCodec;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.core.registries.codec.RegistryFileCodec;
+import net.minecraft.resources.Identifier;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.UnmodifiableView;
@@ -48,7 +48,7 @@ public final class QuasarParticleData {
             Codec.BOOL.optionalFieldOf("additive", false).forGetter(QuasarParticleData::additive),
             RenderStyle.CODEC.optionalFieldOf("render_style").forGetter(particleData -> Optional.of(particleData.renderStyle()))
     ).apply(instance, (shouldCollide, faceVelocity, velocityStretchFactor, modules, spriteData, additive, renderStyle) -> new QuasarParticleData(shouldCollide, faceVelocity, velocityStretchFactor, modules, spriteData.orElse(null), additive, renderStyle.orElseGet(RenderStyleRegistry.BILLBOARD))));
-    public static final Codec<Holder<QuasarParticleData>> CODEC = RegistryFileCodec.create(QuasarParticles.PARTICLE_DATA, DIRECT_CODEC);
+    public static final Codec<Holder<QuasarParticleData>> CODEC = RegistryFileCodec.create(QuasarParticles.PARTICLE_DATA, DIRECT_CODEC, true);
     private boolean shouldCollide;
     private boolean faceVelocity;
     private float velocityStretchFactor;
@@ -76,8 +76,8 @@ public final class QuasarParticleData {
         this.renderStyle = renderStyle;
     }
 
-    public @Nullable ResourceLocation getRegistryId() {
-        return QuasarParticles.registryAccess().registry(QuasarParticles.PARTICLE_DATA).map(registry -> registry.getKey(this)).orElse(null);
+    public @Nullable Identifier getRegistryId() {
+        return QuasarParticles.registryAccess().lookup(QuasarParticles.PARTICLE_DATA).map(registry -> registry.getKey(this)).orElse(null);
     }
 
     public boolean shouldCollide() {

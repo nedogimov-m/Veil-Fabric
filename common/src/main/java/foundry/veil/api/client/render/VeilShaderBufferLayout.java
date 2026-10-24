@@ -58,7 +58,7 @@ public record VeilShaderBufferLayout<T>(String name,
      * @return The actual binding this block uses
      */
     public ShaderBlock.BufferBinding binding() {
-        return VeilRenderSystem.shaderStorageBufferSupported() ? this.requestedBinding : ShaderBlock.BufferBinding.UNIFORM;
+        return this.requestedBinding;
     }
 
     /**
@@ -99,7 +99,7 @@ public record VeilShaderBufferLayout<T>(String name,
 
         private static final Random RANDOM = new Random();
 
-        private final String name;
+        private String name;
         private final List<GlslStructField> structFields;
         private final Map<String, FieldSerializer<T>> fields;
         private ShaderBlock.BufferBinding binding;
@@ -110,11 +110,18 @@ public record VeilShaderBufferLayout<T>(String name,
             this.structFields = new ArrayList<>();
             this.fields = new Object2ObjectArrayMap<>();
             this.binding = ShaderBlock.BufferBinding.UNIFORM;
-            this.memoryLayout = ShaderBlock.MemoryLayout.SHARED;
+            this.memoryLayout = ShaderBlock.MemoryLayout.STD140;
         }
 
         public Builder<T> binding(ShaderBlock.BufferBinding binding) {
             this.binding = binding;
+            return this;
+        }
+
+        /** Stable native block name for an explicitly declared std140 shader binding. */
+        public Builder<T> name(String name) {
+            if (!name.matches("[A-Za-z_][A-Za-z0-9_]*") || name.startsWith("gl_")) throw new IllegalArgumentException("Invalid GLSL block name: " + name);
+            this.name = name;
             return this;
         }
 
@@ -329,61 +336,115 @@ public record VeilShaderBufferLayout<T>(String name,
 
         public Builder<T> mat2(String name, Function<T, Matrix2fc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.MAT2, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                var matrix = serializer.apply(value);
+                for (int column = 0; column < 2; column++) {
+                    for (int row = 0; row < 2; row++) buffer.putFloat(index + column * 16 + row * 4, matrix.get(column, row));
+                }
+            });
             return this;
         }
 
         public Builder<T> mat3(String name, Function<T, Matrix3fc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.MAT3, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                var matrix = serializer.apply(value);
+                for (int column = 0; column < 3; column++) {
+                    for (int row = 0; row < 3; row++) buffer.putFloat(index + column * 16 + row * 4, matrix.get(column, row));
+                }
+            });
             return this;
         }
 
         public Builder<T> mat4(String name, Function<T, Matrix4fc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.MAT4, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                var matrix = serializer.apply(value);
+                for (int column = 0; column < 4; column++) {
+                    for (int row = 0; row < 4; row++) buffer.putFloat(index + column * 16 + row * 4, matrix.get(column, row));
+                }
+            });
             return this;
         }
 
         public Builder<T> mat3x2(String name, Function<T, Matrix3x2fc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.MAT3X2, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                float[] matrix = new float[6];
+                serializer.apply(value).get(matrix);
+                for (int column = 0; column < 3; column++) {
+                    for (int row = 0; row < 2; row++) buffer.putFloat(index + column * 16 + row * 4, matrix[column * 2 + row]);
+                }
+            });
             return this;
         }
 
         public Builder<T> mat4x3(String name, Function<T, Matrix4x3fc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.MAT4X3, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                float[] matrix = new float[12];
+                serializer.apply(value).get(matrix);
+                for (int column = 0; column < 4; column++) {
+                    for (int row = 0; row < 3; row++) buffer.putFloat(index + column * 16 + row * 4, matrix[column * 3 + row]);
+                }
+            });
             return this;
         }
 
         public Builder<T> dmat2(String name, Function<T, Matrix2dc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.DMAT2, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                var matrix = serializer.apply(value);
+                for (int column = 0; column < 2; column++) {
+                    for (int row = 0; row < 2; row++) buffer.putDouble(index + column * 16 + row * 8, matrix.get(column, row));
+                }
+            });
             return this;
         }
 
         public Builder<T> dmat3(String name, Function<T, Matrix3dc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.DMAT3, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                var matrix = serializer.apply(value);
+                for (int column = 0; column < 3; column++) {
+                    for (int row = 0; row < 3; row++) buffer.putDouble(index + column * 32 + row * 8, matrix.get(column, row));
+                }
+            });
             return this;
         }
 
         public Builder<T> dmat4(String name, Function<T, Matrix4dc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.DMAT4, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                var matrix = serializer.apply(value);
+                for (int column = 0; column < 4; column++) {
+                    for (int row = 0; row < 4; row++) buffer.putDouble(index + column * 32 + row * 8, matrix.get(column, row));
+                }
+            });
             return this;
         }
 
         public Builder<T> dmat3x2(String name, Function<T, Matrix3x2dc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.DMAT3X2, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                double[] matrix = new double[6];
+                serializer.apply(value).get(matrix);
+                for (int column = 0; column < 3; column++) {
+                    for (int row = 0; row < 2; row++) buffer.putDouble(index + column * 16 + row * 8, matrix[column * 2 + row]);
+                }
+            });
             return this;
         }
 
         public Builder<T> dmat4x3(String name, Function<T, Matrix4x3dc> serializer) {
             this.structFields.add(new GlslStructField(GlslTypeSpecifier.BuiltinType.DMAT4X3, name));
-            this.fields.put(name, (value, index, buffer) -> serializer.apply(value).get(index, buffer));
+            this.fields.put(name, (value, index, buffer) -> {
+                double[] matrix = new double[12];
+                serializer.apply(value).get(matrix);
+                for (int column = 0; column < 4; column++) {
+                    for (int row = 0; row < 3; row++) buffer.putDouble(index + column * 32 + row * 8, matrix[column * 3 + row]);
+                }
+            });
             return this;
         }
 
