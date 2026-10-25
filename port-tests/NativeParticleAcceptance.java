@@ -31,6 +31,11 @@ public final class NativeParticleAcceptance implements ClientModInitializer {
     private int ticks;private boolean ran;
     @Override public void onInitializeClient(){ClientTickEvents.END_CLIENT_TICK.register(client->{
         if(ran||++ticks<5||!client.isGameLoadFinished())return;ran=true;
+        var report=verifyNative(client);
+        try{Files.writeString(Path.of(System.getProperty("veil.particles.report")),new GsonBuilder().setPrettyPrinting().create().toJson(report));}catch(Exception failure){throw new RuntimeException(failure);}client.stop();
+    });}
+    /** Existing genuine GPU assertions, also usable inside the full installed-mod world. */
+    public static Map<String,Object> verifyNative(net.minecraft.client.Minecraft client){
         var report=new LinkedHashMap<String,Object>();var checks=new ArrayList<String>();var device=RenderSystem.getDevice();report.put("backend",device.getDeviceInfo().backendName());
         class Shaders extends ShaderManager{Shaders(){super(device,PROGRAM_SET,new ShaderPreDefinitions());}void load(){var resources=client.getResourceManager();apply(prepare(resources,InactiveProfiler.INSTANCE),resources,InactiveProfiler.INSTANCE);}}
         var fogLayout=GpuUniformBuffer.layoutBuilder().field("FogColor",GpuUniformBuffer.ValueType.VEC4);
@@ -93,8 +98,9 @@ public final class NativeParticleAcceptance implements ClientModInitializer {
             }
             report.put("status","passed");
         }catch(Throwable failure){failure.printStackTrace();report.put("status","failed");report.put("error",failure.toString());}
-        report.put("checks",checks);report.put("cases",checks.size());try{Files.writeString(Path.of(System.getProperty("veil.particles.report")),new GsonBuilder().setPrettyPrinting().create().toJson(report));}catch(Exception failure){throw new RuntimeException(failure);}client.stop();
-    });}
+        report.put("checks",checks);report.put("cases",checks.size());
+        return report;
+    }
     private static RenderPipeline pipeline(GpuFramebuffer target,boolean additive){
         var bindings=BindGroupLayout.builder();for(String name:new String[]{"Projection","DynamicTransforms","Fog"})bindings.withUniform(name,UniformType.UNIFORM_BUFFER);for(String name:new String[]{"Sampler0","Sampler2"})bindings.withUniform(name,UniformType.COMBINED_IMAGE_SAMPLER);
         return RenderPipeline.builder().withLocation(Identifier.parse("veil_test:particle_"+additive)).withVertexShader(id()).withFragmentShader(id()).withBindGroupLayout(bindings.build())

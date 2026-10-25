@@ -2,6 +2,8 @@
 
 Fabric rendering, shader and editor infrastructure for Minecraft 26.3. Original project: [FoundryMC/Veil](https://github.com/FoundryMC/Veil). Preserve `LICENSE` and the dependency notices in `licenses/`.
 
+Native world/editor/GPU checks, exact JAR hashes and reproduction: [GAMEPLAY_AUDIT.md](GAMEPLAY_AUDIT.md).
+
 ## Workspace
 
 Clone the Fabric 26.3 branches into sibling directories:

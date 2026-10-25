@@ -25,16 +25,24 @@ import java.util.*;
 /** New light algorithms/instance layouts/R8 DDA only; no full Veil bootstrap claim. */
 public final class NativeLightAcceptance implements ClientModInitializer {
     private int ticks; private boolean ran;
-    @Override public void onInitializeClient() { ClientTickEvents.END_CLIENT_TICK.register(client -> {
-        if (ran || ++ticks < 5 || !client.isGameLoadFinished()) return; ran = true;
+    @Override public void onInitializeClient(){ClientTickEvents.END_CLIENT_TICK.register(client->{
+        if(ran||++ticks<5||!client.isGameLoadFinished())return;ran=true;
+        var report=verifyNative(client);
+        try{Files.writeString(Path.of(System.getProperty("veil.lights.report")),new GsonBuilder().setPrettyPrinting().create().toJson(report));}catch(Exception failure){throw new RuntimeException(failure);}client.stop();
+    });}
+    /** Existing genuine GPU assertions, also usable inside the full installed-mod world. */
+    public static Map<String,Object> verifyNative(net.minecraft.client.Minecraft client){
         var report = new LinkedHashMap<String,Object>(); var checks = new ArrayList<String>();
         var device = RenderSystem.getDevice(); report.put("backend",device.getDeviceInfo().backendName());
-        // An explicit identity extracted-camera fixture; no global camera update or registry stub.
-        var cameraLayout = VeilShaderBufferLayout.<Matrix4f>builder().name("NativeLightCamera")
+        // Use the installed registry name when full Veil mixins are active. The identity
+        // payload overrides only this draw; the installed view frame retains its own blocks.
+        var installedCamera = NativeShaderBlocks.snapshot().get(id("camera"));
+        var cameraLayout = VeilShaderBufferLayout.<Matrix4f>builder().name(installedCamera == null ? "NativeLightCamera" : installedCamera.name())
                 .mat4("ProjMat", v->v).mat4("IProjMat",v->v).mat4("ViewMat",v->v).mat4("IViewMat",v->v)
                 .mat3("IViewRotMat",v->new Matrix3f()).vec3("CameraPosition",v->new Vector3f())
                 .f32("NearPlane",v->0f).vec3("CameraBobOffset",v->new Vector3f()).f32("FarPlane",v->1f).build();
-        NativeShaderBlocks.bindRuntime(()->Map.of(id("camera"),cameraLayout));
+        var previousLayouts=runtimeLayouts();
+        if (installedCamera == null) NativeShaderBlocks.bindRuntime(()->Map.of(id("camera"),cameraLayout));
         class Shaders extends ShaderManager {
             Shaders(){super(device,ShaderManager.PROGRAM_SET,new ShaderPreDefinitions());}
             void load(){var resources=client.getResourceManager();apply(prepare(resources,InactiveProfiler.INSTANCE),resources,InactiveProfiler.INSTANCE);}
@@ -96,10 +104,16 @@ public final class NativeLightAcceptance implements ClientModInitializer {
             }
             report.put("status","passed");
         } catch(Throwable failure){failure.printStackTrace();report.put("status","failed");report.put("error",failure.toString());}
-        finally{NativeShaderBlocks.unbindRuntime();}
+        finally{NativeShaderBlocks.bindRuntime(previousLayouts);}
         report.put("checks",checks);report.put("cases",checks.size());
-        try{Files.writeString(Path.of(System.getProperty("veil.lights.report")),new GsonBuilder().setPrettyPrinting().create().toJson(report));}catch(Exception failure){throw new RuntimeException(failure);}client.stop();
-    });}
+
+        return report;
+    }
+    @SuppressWarnings("unchecked")
+    private static java.util.function.Supplier<Map<Identifier,VeilShaderBufferLayout<?>>> runtimeLayouts(){
+        try{var field=NativeShaderBlocks.class.getDeclaredField("runtime");field.setAccessible(true);return (java.util.function.Supplier<Map<Identifier,VeilShaderBufferLayout<?>>>)field.get(null);}
+        catch(ReflectiveOperationException failure){throw new AssertionError(failure);}
+    }
     private static void textures(GpuShaderProgram program,GpuFramebuffer scene,NativeVoxelGridTexture grid){
         program.setTexture("AlbedoSampler",scene.color(0).view(),TextureFilter.CLAMP);program.setTexture("NormalSampler",scene.color(1).view(),TextureFilter.CLAMP);
         if(program.hasUniform("DepthSampler"))program.setTexture("DepthSampler",scene.depth().view(),TextureFilter.CLAMP);

@@ -21,9 +21,14 @@ import java.util.*;
 public final class NativeEditorTextureAcceptance implements ClientModInitializer {
     private int ticks;private boolean ran;
     @Override public void onInitializeClient(){ClientTickEvents.END_CLIENT_TICK.register(client->{
-        if(ran||++ticks<5||!client.isGameLoadFinished())return;ran=true;final var report=new LinkedHashMap<String,Object>();final var device=RenderSystem.getDevice();
+        if(ran||++ticks<5||!client.isGameLoadFinished())return;ran=true;
+        final var report=verifyNative(client,Path.of(System.getProperty("veil.editor.texture.output")));
+        try{Files.writeString(Path.of(System.getProperty("veil.editor.texture.report")),new GsonBuilder().setPrettyPrinting().create().toJson(report));}catch(Exception failure){throw new RuntimeException(failure);}client.stop();
+    });}
+    /** Existing preview/export GPU assertions, callable with the installed Veil runtime. */
+    public static Map<String,Object> verifyNative(net.minecraft.client.Minecraft client,Path folder){
+        final var report=new LinkedHashMap<String,Object>();final var device=RenderSystem.getDevice();
         report.put("backend",device.getDeviceInfo().backendName());report.put("device",device.getDeviceInfo().name());report.put("deviceClass",device.getClass().getName());report.put("deviceHooks",java.util.Arrays.stream(device.getClass().getDeclaredMethods()).map(java.lang.reflect.Method::getName).filter(name->name.contains("trackNative")).toList());
-        final Path folder=Path.of(System.getProperty("veil.editor.texture.output"));
         try(var preview=new NativeTexturePreview(device);
             var hdr=GpuFramebuffer.builder("new inspector HDR",2,2).color(GpuFormat.RGBA16_FLOAT).build(device);
             var depth=GpuFramebuffer.builder("new inspector depth",2,2).depth(GpuFormat.D32_FLOAT).build(device);
@@ -67,8 +72,8 @@ public final class NativeEditorTextureAcceptance implements ClientModInitializer
             check(!cube.getTexture().isClosed()&&!array.getTexture().isClosed()&&!hdr.color(0).texture().isClosed()&&!depth.depth().texture().isClosed(),"Preview/export never dispose caller textures or views");
             report.put("status","passed");report.put("checks",List.of("actual typed frontend inventory plus explicit native single-layer array identity","binding-only 2D source preview, exact rows/alpha and asynchronous PNG after source retirement","actual native mip export and independent per-file vertical flip","sampled HDR clamp, depth grayscale and unsigned integer normalized preview","actual cubemap face/panorama and array-layer preview/PNG export","caller ownership preserved"));
         }catch(Throwable failure){failure.printStackTrace();report.put("status","failed");report.put("error",failure.toString());}
-        finally{try{Files.writeString(Path.of(System.getProperty("veil.editor.texture.report")),new GsonBuilder().setPrettyPrinting().create().toJson(report));}catch(Exception failure){throw new RuntimeException(failure);}client.stop();}
-    });}
+        return report;
+    }
     private static NativeImage image(int width,int height,int color){final var image=new NativeImage(width,height,false);for(int y=0;y<height;y++)for(int x=0;x<width;x++)image.setPixel(x,y,color);return image;}
     private static int color(int face){return 0xff000000|((face*36+20)&255)<<16|((face*24+30)&255)<<8|((face*16+40)&255);}
     private static void rgba(com.mojang.renderpearl.api.textures.GpuTextureView image,int red,int green,int blue,int alpha){final var pixels=TextureDownloader.readRgba(image);final int[] expected={red,green,blue,alpha};for(int index=0;index<pixels.length;index++)check(Math.abs((pixels[index]&255)-expected[index%4])<=1,"Wrong native inspector pixel at "+index+": "+(pixels[index]&255)+" expected "+expected[index%4]);}

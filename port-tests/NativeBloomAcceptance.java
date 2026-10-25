@@ -29,6 +29,11 @@ public final class NativeBloomAcceptance implements ModInitializer,ClientModInit
     @Override public void onInitialize(){PostPipelineStageRegistry.bootstrap();}
     @Override public void onInitializeClient(){ClientTickEvents.END_CLIENT_TICK.register(client->{
         if(ran||++ticks<5||!client.isGameLoadFinished())return;ran=true;
+        var report=verifyNative(client);
+        try{Files.writeString(Path.of(System.getProperty("veil.bloom.report")),new GsonBuilder().setPrettyPrinting().create().toJson(report));}catch(Exception failure){throw new RuntimeException(failure);}client.stop();
+    });}
+    /** Existing genuine GPU assertions, also usable inside the full installed-mod world. */
+    public static Map<String,Object> verifyNative(net.minecraft.client.Minecraft client){
         final var report=new LinkedHashMap<String,Object>();final var device=RenderSystem.getDevice();
         report.put("backend",device.getDeviceInfo().backendName());report.put("device",device.getDeviceInfo().name());
         final var main=new TextureTarget("native Bloom caller",16,16,GpuFormat.RGBA8_UNORM,GpuFormat.D32_FLOAT);
@@ -91,8 +96,9 @@ public final class NativeBloomAcceptance implements ModInitializer,ClientModInit
             check(!main.getColorTexture().isClosed()&&!main.getDepthTexture().isClosed(),"Bloom retirement preserves caller resources");
             report.put("status","passed");report.put("checks",List.of("real RGBA16F emission with borrowed reverse depth","aborted preparation, submission callback and clear-once multi-draw accumulation","actual original seven-stage core/bloom JSON, packed HDR down/up blur and tone mapping","native main resolve, caller-depth preservation and final RGBA0 clear","retired HDR owner retained by actual pending leases"));
         }catch(Throwable failure){failure.printStackTrace();report.put("status","failed");report.put("error",failure.toString());}
-        finally {manager.free();main.destroyBuffers();try{Files.writeString(Path.of(System.getProperty("veil.bloom.report")),new GsonBuilder().setPrettyPrinting().create().toJson(report));}catch(Exception failure){throw new RuntimeException(failure);}client.stop();}
-    });}
+        finally {manager.free();main.destroyBuffers();}
+        return report;
+    }
     private static void reload(PreparableReloadListener listener,ResourceManager resources) {
         listener.reload(new PreparableReloadListener.SharedState(resources),Runnable::run,new PreparableReloadListener.PreparationBarrier(){public <T> CompletableFuture<T> wait(T value){return CompletableFuture.completedFuture(value);}},Runnable::run).join();
     }
